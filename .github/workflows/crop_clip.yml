@@ -1,0 +1,56 @@
+name: Crop Clip
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "Job ID"
+        required: true
+      clip_index:
+        description: "Clip index (0, 1, or 2)"
+        required: true
+      start_time:
+        description: "Start time (HH:MM:SS or seconds)"
+        required: true
+      end_time:
+        description: "End time (HH:MM:SS or seconds)"
+        required: true
+      video_id:
+        description: "YouTube video ID"
+        required: true
+
+jobs:
+  crop-clip:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Crop to vertical
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
+          JOB_ID: ${{ github.event.inputs.job_id }}
+          CLIP_INDEX: ${{ github.event.inputs.clip_index }}
+          START_TIME: ${{ github.event.inputs.start_time }}
+          END_TIME: ${{ github.event.inputs.end_time }}
+          VIDEO_ID: ${{ github.event.inputs.video_id }}
+        run: |
+          python scripts/crop_clip.py \
+            --job-id "$JOB_ID" \
+            --clip-index "$CLIP_INDEX" \
+            --start "$START_TIME" \
+            --end "$END_TIME" \
+            --video-id "$VIDEO_ID"

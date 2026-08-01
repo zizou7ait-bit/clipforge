@@ -1,0 +1,217 @@
+name: TikTok Style
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'Job ID'
+        required: true
+      r2_bucket:
+        description: 'R2 Bucket Name'
+        required: true
+      r2_endpoint:
+        description: 'R2 Endpoint URL'
+        required: true
+
+env:
+  PYTHON_VERSION: '3.11'
+  OUTPUT_DIR: output
+
+jobs:
+  style-tiktok:
+    runs-on: ubuntu-latest
+    steps:
+      # ─── CHECKOUT & SETUP ───
+      - uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Install FFmpeg & dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg ffprobe fonts-dejavu-core
+          pip install openai-whisper pillow numpy
+          
+      # ─── DOWNLOAD FINAL VIDEO FROM R2 ───
+      - name: Download final.mp4 from R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          pip install awscli
+          aws configure set default.s3.signature_version s3v4
+          aws s3 cp s3://${{ github.event.inputs.r2_bucket }}/jobs/${{ github.event.inputs.job_id }}/final.mp4 ./final.mp4 \
+            --endpoint-url ${{ github.event.inputs.r2_endpoint }} \
+            --region auto
+          
+      # ─── TRANSCRIBE WITH WHISPER ───
+      - name: Transcribe audio with Whisper
+        run: |
+          whisper ./final.mp4 --model base --language en --word_timestamps True --output_format json --output_dir ./
+          mv final.json transcription.json
+          
+      # ─── GENERATE TIKTOK CAPTIONS (Python Script) ───
+      - name: Generate TikTok-style ASS captions
+        run: |
+          cat > generate_captions.py << 'PYEOF'
+          import json
+          import math
+
+          # TikTok style config
+          STYLE = {
+              'font': 'DejaVu Sans',
+              'size': 48,
+              'outline': 3,
+              'shadow': 0,
+              'color': '&H00FFFFFF',      # White
+              'outline_color': '&H00000000', # Black outline
+              'highlight_color': '&H0000FF88', # TikTok green highlight
+              'width': 1080,
+              'height': 1920,
+              'margin_v': 150,
+          }
+
+          def ms_to_ass(time_ms):
+              hours = int(time_ms // 3600000)
+              minutes = int((time_ms % 3600000) // 60000)
+              seconds = int((time_ms % 60000) // 1000)
+              centis = int((time_ms % 1000) // 10)
+              return f"{hours}:{minutes:02d}:{seconds:02d}.{centis:02d}"
+
+          def escape_ass(text):
+              return text.replace('\\', '\\\\').replace('{', '\\{').replace('}', '\\}')
+
+          with open('transcription.json', 'r') as f:
+              data = json.load(f)
+
+          lines = []
+          lines.append("[Script Info]")
+          lines.append("Title: TikTok Captions")
+          lines.append("ScriptType: v4.00+")
+          lines.append("PlayResX: 1080")
+          lines.append("PlayResY: 1920")
+          lines.append("")
+          lines.append("[V4+ Styles]")
+          lines.append("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding")
+          lines.append(f"Style: TikTok,{STYLE['font']},{STYLE['size']},{STYLE['color']},{STYLE['highlight_color']},{STYLE['outline_color']},&H00000000,1,0,0,0,100,100,0,0,1,{STYLE['outline']},{STYLE['shadow']},2,40,40,{STYLE['margin_v']},1")
+          lines.append("")
+
+          lines.append("[Events]")
+          lines.append("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text")
+
+          # Group words into lines (4-5 words per caption)
+          words = []
+          for seg in data.get('segments', []):
+              for w in seg.get('words', []):
+                  words.append({
+                      'word': w['word'].strip(),
+                      'start': w['start'] * 1000,
+                      'end': w['end'] * 1000
+                  })
+
+          # Chunk into lines
+          chunk_size = 4
+          for i in range(0, len(words), chunk_size):
+              chunk = words[i:i+chunk_size]
+              if not chunk:
+                  continue
+              
+              line_start = chunk[0]['start']
+              line_end = chunk[-1]['end']
+              
+              # Build karaoke-style text: each word highlighted when spoken
+              text_parts = []
+              for w in chunk:
+                  word_start = w['start'] - line_start
+                  word_end = w['end'] - line_start
+                  duration = word_end - word_start
+                  escaped = escape_ass(w['word'])
+                  # Karaoke tag: {\k<centisecs>}word
+                  centis = int(duration / 10)
+                  text_parts.append(f"{{\\k{centis}}}{escaped}")
+              
+              text = " ".join(text_parts)
+              lines.append(f"Dialogue: 0,{ms_to_ass(line_start)},{ms_to_ass(line_end)},TikTok,,0,0,0,,{text}")
+
+          with open('tiktok_captions.ass', 'w', encoding='utf-8') as f:
+              f.write('\n'.join(lines))
+              
+          print(f"Generated {len(lines)} caption lines")
+          PYEOF
+          python generate_captions.py
+
+      # ─── APPLY TIKTOK EFFECTS WITH FFMPEG ───
+      - name: Render TikTok video with effects
+        run: |
+          # Get video dimensions
+          WIDTH=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=s=x:p=0 final.mp4)
+          HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=s=x:p=0 final.mp4)
+          
+          echo "Input: ${WIDTH}x${HEIGHT}"
+          
+          # Build complex FFmpeg filter for TikTok effects
+          # Effects applied:
+          # 1. Boom effect at start (zoom + flash)
+          # 2. Slow-motion segments (optional - detect high energy)
+          # 3. Background blur padding if not 9:16
+          # 4. Logo overlay
+          # 5. Caption burn-in
+          
+          cat > render_tiktok.py << 'PYEOF'
+          import subprocess
+          import json
+
+          # Configuration
+          LOGO_URL = "${{ secrets.TIKTOK_LOGO_URL }}"  # Set this in GitHub Secrets
+          ENABLE_SLOWMO = True
+          SLOWMO_SPEED = 0.5
+          BOOM_DURATION = 0.4  # seconds
+
+          # Build FFmpeg command
+          filters = []
+
+          # Scale to TikTok 1080x1920 with background blur padding
+          filters.append(
+              "split[original][copy];"
+              "[copy]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gaussblur=sigma=20[bg];"
+              "[original]scale=1080:1920:force_original_aspect_ratio=decrease[fg];"
+              "[bg][fg]overlay=(W-w)/2:(H-h)/2:format=auto[scaled]"
+          )
+
+          # Boom effect: zoom from 1.5x to 1.0x with brightness flash at start
+          # Using zoompan for the first N frames
+          boom_filter = (
+              "[scaled]split[boom_base][boom_zoom];"
+              f"[boom_zoom]trim=duration={BOOM_DURATION},setpts=PTS-STARTPTS,"
+              f"zoompan=z='min(zoom+0.05,1.5)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920,"
+              f"fade=t=out:st={BOOM_DURATION-0.1}:d=0.1:alpha=1[boomed];"
+              f"[boom_base]trim=start={BOOM_DURATION},setpts=PTS-STARTPTS[main];"
+              f"[boomed][main]concat=n=2:v=1:a=0[boom_out]"
+          )
+          filters.append(boom_filter)
+
+          # Add logo overlay (top-right corner)
+          # Download logo first if URL provided
+          logo_filter = "[boom_out]overlay=W-w-30:30:format=auto[logo]"
+          filters.append(logo_filter)
+
+          # Burn in captions
+          caption_filter = "[logo]subtitles=tiktok_captions.ass:force_style='FontSize=48,Outline=3,Shadow=0,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Bold=1'[final]"
+          filters.append(caption_filter)
+
+          # Audio: normalize + slight compression for TikTok
+          afilters = "loudnorm=I=-14:TP=-1.5:LRA=11,acompressor=threshold=-20dB:ratio=4:attack=5:release=100"
+
+          # Build full command
+          filter_complex = ";".join(filters)
+
+          cmd = [
+              "ffmpeg", "-y",
+              "-i", "final.mp4",
+              "-i", "logo.png",  # Will be downloaded below
+              "-filter_complex", filter_complex,
+              "-map", "[final]",
+             

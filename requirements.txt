@@ -1,4 +1,0 @@
-google-generativeai>=0.7.0
-boto3>=1.34.0
-yt-dlp>=2024.7.0
-requests>=2.31.0

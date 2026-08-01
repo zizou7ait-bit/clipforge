@@ -4,10 +4,7 @@ import json
 import requests
 from google import genai
 
-client = genai.Client(api_key=gemini_api_key)
-from google import genai
-
-# Read environment variables passed from GitHub Actions
+# Read environment variables passed from GitHub Actions first
 twitch_url = os.environ.get("TWITCH_URL")
 job_id = os.environ.get("JOB_ID")
 gemini_api_key = os.environ.get("GEMINI_API_KEY")
@@ -41,7 +38,7 @@ except Exception as e:
     print(f"[WARNING] Could not fetch chat via chat-downloader ({e}). Proceeding with fallback mode.")
     messages = []
 
-# Initialize Gemini Client using the modern SDK package
+# Initialize Gemini Client using the modern SDK package with the proper variable defined
 client = genai.Client(api_key=gemini_api_key)
 
 # Generate a mock/structured JSON clips output so pipeline doesn't break

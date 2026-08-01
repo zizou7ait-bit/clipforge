@@ -69,6 +69,7 @@ bucket_name = os.environ.get('R2_BUCKET_NAME')
 # Upload JSON
 r2_json_key = f"jobs/{job_id}/clips.json"
 s3.upload_file(json_output_path, bucket_name, r2_json_key)
+print(f"[INFO] Successfully uploaded {r2_json_key}")
 
 # Upload MP4 Video
 r2_video_key = f"jobs/{job_id}/clip_1.mp4"

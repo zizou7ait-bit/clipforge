@@ -20,46 +20,38 @@ jobs:
   style-tiktok:
     runs-on: ubuntu-latest
     steps:
-      # ─── CHECKOUT & SETUP ───
       - uses: actions/checkout@v4
-      
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          
-      - name: Install FFmpeg & dependencies
+
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu-core
-          pip install openai-whisper pillow numpy boto3
-          
-      # ─── DOWNLOAD FINAL VIDEO FROM R2 ───
-      - name: Download final.mp4 from R2
+          pip install openai-whisper pillow numpy boto3 urllib3
+
+      - name: Download final.mp4 from R2 public URL
         run: |
           ENDPOINT="${{ github.event.inputs.r2_endpoint }}"
           ACCOUNT_ID=$(echo "$ENDPOINT" | sed 's|https://||' | sed 's|\.r2\.cloudflarestorage\.com||')
-          
           PUBLIC_URL="https://pub-${ACCOUNT_ID}.r2.dev"
           FILE_PATH="/jobs/${{ github.event.inputs.job_id }}/final.mp4"
-          
-          echo "Downloading from: ${PUBLIC_URL}${FILE_PATH}"
+          echo "Downloading: ${PUBLIC_URL}${FILE_PATH}"
           wget -q -O final.mp4 "${PUBLIC_URL}${FILE_PATH}" || {
-            echo "ERROR: Failed to download final.mp4"
+            echo "ERROR: Download failed"
             exit 1
           }
-          
           ls -lh final.mp4
-          echo "Download complete!"
-          
-      # ─── TRANSCRIBE WITH WHISPER ───
-      - name: Transcribe audio with Whisper
+
+      - name: Transcribe with Whisper
         run: |
           whisper ./final.mp4 --model tiny --language en --word_timestamps True --output_format json --output_dir ./
           mv final.json transcription.json
-          
-      # ─── GENERATE TIKTOK CAPTIONS ───
-      - name: Generate TikTok-style ASS captions
+
+      - name: Generate TikTok ASS captions
         run: |
           cat > generate_captions.py << 'PYEOF'
           import json
@@ -118,52 +110,36 @@ jobs:
               chunk = words[i:i+chunk_size]
               if not chunk:
                   continue
-              
               line_start = chunk[0]['start']
               line_end = chunk[-1]['end']
-              
               text_parts = []
               for w in chunk:
                   duration_ms = w['end'] - w['start']
                   centis = max(1, int(duration_ms / 10))
                   escaped = escape_ass(w['word'])
                   text_parts.append(f"{{\\k{centis}}}{escaped}")
-              
               text = " ".join(text_parts)
               lines.append(f"Dialogue: 0,{ms_to_ass(line_start)},{ms_to_ass(line_end)},TikTok,,0,0,0,,{text}")
 
           with open('tiktok_captions.ass', 'w', encoding='utf-8') as f:
               f.write('\n'.join(lines))
-              
           print(f"Generated captions with {len(words)} words")
           PYEOF
           python generate_captions.py
 
-      # ─── RENDER TIKTOK VIDEO ───
-      - name: Render TikTok video with effects
+      - name: Render TikTok video
         run: |
-          WIDTH=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=s=x:p=0 final.mp4)
-          HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=s=x:p=0 final.mp4)
-          echo "Input dimensions: ${WIDTH}x${HEIGHT}"
-          
           ffmpeg -y \
             -i final.mp4 \
             -vf "subtitles=tiktok_captions.ass:force_style='FontSize=48,Outline=3,Shadow=0,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Bold=1'" \
             -af "loudnorm=I=-14:TP=-1.5:LRA=11,acompressor=threshold=-20dB:ratio=4:attack=5:release=100" \
-            -c:v libx264 \
-            -preset fast \
-            -crf 23 \
-            -c:a aac \
-            -b:a 192k \
-            -movflags +faststart \
-            -pix_fmt yuv420p \
+            -c:v libx264 -preset fast -crf 23 \
+            -c:a aac -b:a 192k \
+            -movflags +faststart -pix_fmt yuv420p \
             tiktok.mp4
-          
-          echo "TikTok video rendered successfully!"
           ls -lh tiktok.mp4
 
-      # ─── UPLOAD TO R2 (monkey-patched SSL bypass) ───
-      - name: Upload tiktok.mp4 to R2
+      - name: Upload to R2 (SSL bypass via custom pool manager)
         env:
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -176,69 +152,65 @@ jobs:
           import ssl
           import boto3
           from botocore.client import Config
+          from urllib3 import PoolManager
+          import botocore.httpsession
 
-          # ─── AGGRESSIVE SSL BYPASS ───
-          # Monkey-patch the entire SSL system before boto3 touches anything
-          ssl._create_default_https_context = ssl._create_unverified_context
-          os.environ['AWS_CA_BUNDLE'] = ''
-          os.environ['REQUESTS_CA_BUNDLE'] = ''
-          os.environ['CURL_CA_BUNDLE'] = ''
+          # -------------------------------------------------------------------
+          # 1. Create a completely unverified SSL context
+          # -------------------------------------------------------------------
+          unverified_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+          unverified_ctx.check_hostname = False
+          unverified_ctx.verify_mode = ssl.CERT_NONE
 
+          # -------------------------------------------------------------------
+          # 2. Force botocore's URLLib3Session to use a pool manager with this context
+          # -------------------------------------------------------------------
+          original_init = botocore.httpsession.URLLib3Session.__init__
+          def patched_init(self, *args, **kwargs):
+              # Call original init, then replace the pool manager
+              original_init(self, *args, **kwargs)
+              self._pool_manager = PoolManager(
+                  ssl_context=unverified_ctx,
+                  cert_reqs=ssl.CERT_NONE,
+                  assert_hostname=False
+              )
+              self._pool_manager_kwargs = {
+                  'ssl_context': unverified_ctx,
+                  'cert_reqs': ssl.CERT_NONE,
+                  'assert_hostname': False
+              }
+          botocore.httpsession.URLLib3Session.__init__ = patched_init
+
+          # -------------------------------------------------------------------
+          # 3. Also disable all urllib3 warnings
+          # -------------------------------------------------------------------
           import urllib3
           urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-          # Also patch botocore's internal SSL context
-          try:
-              import botocore.httpsession
-              original_init = botocore.httpsession.URLLib3Session.__init__
-              def patched_init(self, *args, **kwargs):
-                  original_init(self, *args, **kwargs)
-                  if hasattr(self, '_pool_manager'):
-                      self._pool_manager.connection_pool_kw['cert_reqs'] = ssl.CERT_NONE
-                      self._pool_manager.connection_pool_kw['assert_hostname'] = False
-              botocore.httpsession.URLLib3Session.__init__ = patched_init
-          except Exception as e:
-              print(f"Warning: Could not patch botocore session: {e}")
-          # ─── END SSL BYPASS ───
-
-          bucket = os.environ['R2_BUCKET']
-          endpoint = os.environ['R2_ENDPOINT']
-          access_key = os.environ['R2_ACCESS_KEY']
-          secret_key = os.environ['R2_SECRET_KEY']
-          job_id = os.environ['JOB_ID']
-
-          print(f"Bucket: {bucket}")
-          print(f"Endpoint: {endpoint}")
-          print(f"Job ID: {job_id}")
-
+          # -------------------------------------------------------------------
+          # 4. Create the S3 client (verify=False still needed for other layers)
+          # -------------------------------------------------------------------
           s3 = boto3.client(
               's3',
-              endpoint_url=endpoint,
-              aws_access_key_id=access_key,
-              aws_secret_access_key=secret_key,
+              endpoint_url=os.environ['R2_ENDPOINT'],
+              aws_access_key_id=os.environ['R2_ACCESS_KEY'],
+              aws_secret_access_key=os.environ['R2_SECRET_KEY'],
               config=Config(
                   signature_version='s3v4',
-                  s3={'addressing_style': 'path'},
+                  s3={'addressing_style': 'path'}
               ),
               verify=False,
               use_ssl=True
           )
 
-          key = f"jobs/{job_id}/tiktok.mp4"
-          
-          print(f"Uploading to {bucket}/{key}...")
-          s3.upload_file(
-              'tiktok.mp4',
-              bucket,
-              key,
-              ExtraArgs={'ACL': 'public-read'}
-          )
+          bucket = os.environ['R2_BUCKET']
+          key = f"jobs/{os.environ['JOB_ID']}/tiktok.mp4"
+          print(f"Uploading to {bucket}/{key}")
+          s3.upload_file('tiktok.mp4', bucket, key, ExtraArgs={'ACL': 'public-read'})
           print("Upload successful!")
           PYEOF
-          
           python upload_to_r2.py
-          
-      # ─── CLEANUP ───
+
       - name: Cleanup
         if: always()
         run: rm -f final.mp4 tiktok.mp4 transcription.json tiktok_captions.ass

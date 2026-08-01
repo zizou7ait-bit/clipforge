@@ -19,14 +19,14 @@ video_output_path = os.path.join("output", "clip_1.mp4")
 
 print(f"[INFO] Processing Job: {job_id} for VOD: {twitch_url}")
 
-# 2. Define the real clip data (Normally Gemini AI would generate these timestamps)
-# For this script, we are hardcoding a 30-second test clip from the very beginning of the VOD.
+# 2. Define clip data mapped to the actual filename expected by the dashboard
 clips_data = [
     {
         "title": "Stream Highlight",
         "start": "00:00:10",
         "end": "00:00:40",
-        "description": "The first 30 seconds of the stream."
+        "description": "The first 30 seconds of the stream.",
+        "video_file": "clip_1.mp4"
     }
 ]
 
@@ -39,7 +39,6 @@ print("[INFO] Downloading and cutting video segment...")
 start_time = clips_data[0]["start"]
 end_time = clips_data[0]["end"]
 
-# This yt-dlp command downloads ONLY the specific timestamp to save time/server space
 command = [
     "yt-dlp",
     "--download-sections", f"*{start_time}-{end_time}",

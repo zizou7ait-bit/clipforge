@@ -22,6 +22,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
@@ -39,7 +42,6 @@ jobs:
         run: |
           python scripts/find_clips_twitch.py "$TWITCH_URL" "$JOB_ID"
 
-      # 👇 NEW DEBUG STEP 👇
       - name: Debug Environment and Files
         if: always()
         run: |
@@ -52,7 +54,6 @@ jobs:
           if [ -z "${{ secrets.R2_ACCESS_KEY_ID }}" ]; then echo "R2 ACCESS KEY is MISSING!"; else echo "R2 ACCESS KEY is loaded."; fi
           if [ -z "${{ secrets.R2_BUCKET_NAME }}" ]; then echo "R2 BUCKET NAME is MISSING!"; else echo "R2 BUCKET NAME is loaded."; fi
 
-      # 👇 NEW BACKUP UPLOAD STEP 👇
       - name: Catch Local Files (Backup)
         if: always()
         uses: actions/upload-artifact@v4
@@ -64,3 +65,4 @@ jobs:
             *.txt
             scripts/*.mp4
             scripts/*.json
+            output/*

@@ -4,37 +4,65 @@ on:
   workflow_dispatch:
     inputs:
       vod_url:
-        description: 'Twitch VOD URL'
+        description: "Twitch VOD URL to analyze"
         required: true
-        type: string
       job_id:
-        description: 'Job ID'
+        description: "Job ID from dashboard"
         required: true
-        type: string
 
 jobs:
-  run-clip-finder:
+  find-clips-twitch:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.11"
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install yt-dlp boto3 requests
+          pip install -r requirements.txt
 
-      - name: Run script
+      - name: Find clips from chat activity
         env:
-          TWITCH_URL: ${{ github.event.inputs.vod_url }}
-          JOB_ID: ${{ github.event.inputs.job_id }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-        run: python scripts/find_clips_twitch.py
+          R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
+          JOB_ID: ${{ github.event.inputs.job_id }}
+          TWITCH_URL: ${{ github.event.inputs.vod_url }}
+        run: |
+          python scripts/find_clips_twitch.py "$TWITCH_URL" "$JOB_ID"
+
+      - name: Debug Environment and Files
+        if: always()
+        run: |
+          echo "=== CURRENT DIRECTORY ==="
+          pwd
+          echo "=== FILES IN DIRECTORY ==="
+          ls -la
+          echo "=== CHECKING SECRETS ==="
+          if [ -z "${{ secrets.GEMINI_API_KEY }}" ]; then echo "GEMINI API KEY is MISSING!"; else echo "GEMINI API KEY is loaded."; fi
+          if [ -z "${{ secrets.R2_ACCESS_KEY_ID }}" ]; then echo "R2 ACCESS KEY is MISSING!"; else echo "R2 ACCESS KEY is loaded."; fi
+          if [ -z "${{ secrets.R2_BUCKET_NAME }}" ]; then echo "R2 BUCKET NAME is MISSING!"; else echo "R2 BUCKET NAME is loaded."; fi
+
+      - name: Catch Local Files (Backup)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twitch-debug-files
+          path: |
+            *.mp4
+            *.json
+            *.txt
+            scripts/*.mp4
+            scripts/*.json
+            output/*

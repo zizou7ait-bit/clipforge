@@ -5,7 +5,7 @@ import subprocess
 import boto3
 from botocore.client import Config
 
-# 1. Load Environment Variables
+# Load Environment Variables
 twitch_url = os.environ.get("TWITCH_URL")
 job_id = os.environ.get("JOB_ID")
 
@@ -19,25 +19,27 @@ video_output_path = os.path.join("output", "clip_1.mp4")
 
 print(f"[INFO] Processing Job: {job_id} for VOD: {twitch_url}")
 
-# 2. Define clip data mapped to the actual filename expected by the dashboard
-clips_data = [
-    {
-        "title": "Stream Highlight",
-        "start": "00:00:10",
-        "end": "00:00:40",
-        "description": "The first 30 seconds of the stream.",
-        "video_file": "clip_1.mp4"
-    }
-]
+# Define clip data wrapped in the "clips" object matching index.php expectations
+clips_data = {
+    "clips": [
+        {
+            "title": "Stream Highlight",
+            "start": "00:00:10",
+            "end": "00:00:40",
+            "description": "The first 30 seconds of the stream.",
+            "video_file": "clip_1.mp4"
+        }
+    ]
+}
 
 # Save the JSON locally
 with open(json_output_path, "w") as f:
     json.dump(clips_data, f, indent=4)
 
-# 3. Download and Cut the Video using yt-dlp and ffmpeg
+# Download and Cut the Video using yt-dlp and ffmpeg
 print("[INFO] Downloading and cutting video segment...")
-start_time = clips_data[0]["start"]
-end_time = clips_data[0]["end"]
+start_time = clips_data["clips"][0]["start"]
+end_time = clips_data["clips"][0]["end"]
 
 command = [
     "yt-dlp",
@@ -54,7 +56,7 @@ except subprocess.CalledProcessError as e:
     print(f"[ERROR] Failed to download/cut video: {e}")
     sys.exit(1)
 
-# 4. Upload to Cloudflare R2
+# Upload to Cloudflare R2
 print("[INFO] Uploading files to Cloudflare R2...")
 s3 = boto3.client(
     's3',
@@ -65,12 +67,12 @@ s3 = boto3.client(
 )
 bucket_name = os.environ.get('R2_BUCKET_NAME')
 
-# Upload JSON
+# Upload JSON (`clips.json`)
 r2_json_key = f"jobs/{job_id}/clips.json"
 s3.upload_file(json_output_path, bucket_name, r2_json_key)
 print(f"[INFO] Successfully uploaded {r2_json_key}")
 
-# Upload MP4 Video
+# Upload MP4 Video (`clip_1.mp4`)
 r2_video_key = f"jobs/{job_id}/clip_1.mp4"
 if os.path.exists(video_output_path):
     s3.upload_file(video_output_path, bucket_name, r2_video_key)

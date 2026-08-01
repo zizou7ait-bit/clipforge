@@ -38,3 +38,29 @@ jobs:
           TWITCH_URL: ${{ github.event.inputs.vod_url }}
         run: |
           python scripts/find_clips_twitch.py "$TWITCH_URL" "$JOB_ID"
+
+      # 👇 NEW DEBUG STEP 👇
+      - name: Debug Environment and Files
+        if: always()
+        run: |
+          echo "=== CURRENT DIRECTORY ==="
+          pwd
+          echo "=== FILES IN DIRECTORY ==="
+          ls -la
+          echo "=== CHECKING SECRETS ==="
+          if [ -z "${{ secrets.GEMINI_API_KEY }}" ]; then echo "GEMINI API KEY is MISSING!"; else echo "GEMINI API KEY is loaded."; fi
+          if [ -z "${{ secrets.R2_ACCESS_KEY_ID }}" ]; then echo "R2 ACCESS KEY is MISSING!"; else echo "R2 ACCESS KEY is loaded."; fi
+          if [ -z "${{ secrets.R2_BUCKET_NAME }}" ]; then echo "R2 BUCKET NAME is MISSING!"; else echo "R2 BUCKET NAME is loaded."; fi
+
+      # 👇 NEW BACKUP UPLOAD STEP 👇
+      - name: Catch Local Files (Backup)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twitch-debug-files
+          path: |
+            *.mp4
+            *.json
+            *.txt
+            scripts/*.mp4
+            scripts/*.json

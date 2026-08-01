@@ -35,14 +35,8 @@ jobs:
           pip install openai-whisper pillow numpy
           
       # ─── DOWNLOAD FINAL VIDEO FROM R2 ───
-      # Use R2's public URL (R2_PUBLIC_URL) instead of S3 endpoint to avoid SSL issues
       - name: Download final.mp4 from R2
         run: |
-          # Construct the public URL (same format as R2_PUBLIC_URL in config.php)
-          # R2_PUBLIC_URL format: https://pub-ACCOUNTID.r2.dev
-          # File path: /jobs/JOB_ID/final.mp4
-          
-          # Extract account ID from endpoint
           ENDPOINT="${{ github.event.inputs.r2_endpoint }}"
           ACCOUNT_ID=$(echo "$ENDPOINT" | sed 's|https://||' | sed 's|\.r2\.cloudflarestorage\.com||')
           
@@ -52,7 +46,6 @@ jobs:
           echo "Downloading from: ${PUBLIC_URL}${FILE_PATH}"
           wget -q -O final.mp4 "${PUBLIC_URL}${FILE_PATH}" || {
             echo "ERROR: Failed to download final.mp4"
-            echo "URL attempted: ${PUBLIC_URL}${FILE_PATH}"
             exit 1
           }
           
@@ -153,16 +146,11 @@ jobs:
           HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=s=x:p=0 final.mp4)
           echo "Input dimensions: ${WIDTH}x${HEIGHT}"
           
+          # Already 1080x1920 (vertical), so skip scaling entirely
+          # Just burn in the captions and normalize audio
           ffmpeg -y \
             -i final.mp4 \
-            -filter_complex "\
-              split[original][copy];\
-              [copy]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gaussblur=sigma=20[bg];\
-              [original]scale=1080:1920:force_original_aspect_ratio=decrease[fg];\
-              [bg][fg]overlay=(W-w)/2:(H-h)/2:format=auto[scaled];\
-              [scaled]subtitles=tiktok_captions.ass:force_style='FontSize=48,Outline=3,Shadow=0,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Bold=1'[final]" \
-            -map "[final]" \
-            -map 0:a \
+            -vf "subtitles=tiktok_captions.ass:force_style='FontSize=48,Outline=3,Shadow=0,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Bold=1'" \
             -af "loudnorm=I=-14:TP=-1.5:LRA=11,acompressor=threshold=-20dB:ratio=4:attack=5:release=100" \
             -c:v libx264 \
             -preset fast \
@@ -176,7 +164,7 @@ jobs:
           echo "TikTok video rendered successfully!"
           ls -lh tiktok.mp4
 
-      # ─── UPLOAD TO R2 (via S3 API with proper endpoint) ───
+      # ─── UPLOAD TO R2 ───
       - name: Upload tiktok.mp4 to R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -185,8 +173,6 @@ jobs:
         run: |
           pip install awscli
           
-          # Construct the proper S3 endpoint URL
-          # R2 needs: https://BUCKET.ACCOUNTID.r2.cloudflarestorage.com
           ENDPOINT="${{ github.event.inputs.r2_endpoint }}"
           BUCKET="${{ github.event.inputs.r2_bucket }}"
           ACCOUNT_ID=$(echo "$ENDPOINT" | sed 's|https://||' | sed 's|\.r2\.cloudflarestorage\.com||')

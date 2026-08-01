@@ -32,7 +32,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu-core
-          pip install openai-whisper pillow numpy boto3 urllib3
+          pip install openai-whisper pillow numpy boto3
           
       # ─── DOWNLOAD FINAL VIDEO FROM R2 ───
       - name: Download final.mp4 from R2
@@ -162,7 +162,7 @@ jobs:
           echo "TikTok video rendered successfully!"
           ls -lh tiktok.mp4
 
-      # ─── UPLOAD TO R2 (using Python boto3 with SSL disabled) ───
+      # ─── UPLOAD TO R2 (monkey-patched SSL bypass) ───
       - name: Upload tiktok.mp4 to R2
         env:
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -172,21 +172,45 @@ jobs:
           JOB_ID: ${{ github.event.inputs.job_id }}
         run: |
           cat > upload_to_r2.py << 'PYEOF'
-          import boto3
           import os
-          import urllib3
+          import ssl
+          import boto3
           from botocore.client import Config
-          
-          # Disable SSL warnings
+
+          # ─── AGGRESSIVE SSL BYPASS ───
+          # Monkey-patch the entire SSL system before boto3 touches anything
+          ssl._create_default_https_context = ssl._create_unverified_context
+          os.environ['AWS_CA_BUNDLE'] = ''
+          os.environ['REQUESTS_CA_BUNDLE'] = ''
+          os.environ['CURL_CA_BUNDLE'] = ''
+
+          import urllib3
           urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-          
+
+          # Also patch botocore's internal SSL context
+          try:
+              import botocore.httpsession
+              original_init = botocore.httpsession.URLLib3Session.__init__
+              def patched_init(self, *args, **kwargs):
+                  original_init(self, *args, **kwargs)
+                  if hasattr(self, '_pool_manager'):
+                      self._pool_manager.connection_pool_kw['cert_reqs'] = ssl.CERT_NONE
+                      self._pool_manager.connection_pool_kw['assert_hostname'] = False
+              botocore.httpsession.URLLib3Session.__init__ = patched_init
+          except Exception as e:
+              print(f"Warning: Could not patch botocore session: {e}")
+          # ─── END SSL BYPASS ───
+
           bucket = os.environ['R2_BUCKET']
           endpoint = os.environ['R2_ENDPOINT']
           access_key = os.environ['R2_ACCESS_KEY']
           secret_key = os.environ['R2_SECRET_KEY']
           job_id = os.environ['JOB_ID']
-          
-          # Create S3 client with SSL verification disabled
+
+          print(f"Bucket: {bucket}")
+          print(f"Endpoint: {endpoint}")
+          print(f"Job ID: {job_id}")
+
           s3 = boto3.client(
               's3',
               endpoint_url=endpoint,
@@ -195,32 +219,21 @@ jobs:
               config=Config(
                   signature_version='s3v4',
                   s3={'addressing_style': 'path'},
-                  connect_timeout=30,
-                  read_timeout=30
               ),
               verify=False,
               use_ssl=True
           )
-          
-          # Set addressing style to path-based (bucket in path, not subdomain)
-          # This matches how R2 works
+
           key = f"jobs/{job_id}/tiktok.mp4"
           
-          print(f"Uploading to bucket: {bucket}")
-          print(f"Key: {key}")
-          print(f"Endpoint: {endpoint}")
-          
-          try:
-              s3.upload_file(
-                  'tiktok.mp4',
-                  bucket,
-                  key,
-                  ExtraArgs={'ACL': 'public-read'}
-              )
-              print("Upload successful!")
-          except Exception as e:
-              print(f"Upload failed: {e}")
-              raise
+          print(f"Uploading to {bucket}/{key}...")
+          s3.upload_file(
+              'tiktok.mp4',
+              bucket,
+              key,
+              ExtraArgs={'ACL': 'public-read'}
+          )
+          print("Upload successful!")
           PYEOF
           
           python upload_to_r2.py

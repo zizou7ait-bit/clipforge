@@ -32,44 +32,32 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu-core
-          pip install openai-whisper pillow numpy boto3
+          pip install openai-whisper pillow numpy
           
       # ─── DOWNLOAD FINAL VIDEO FROM R2 ───
+      # Use R2's public URL (R2_PUBLIC_URL) instead of S3 endpoint to avoid SSL issues
       - name: Download final.mp4 from R2
         run: |
-          cat > download_from_r2.py << 'PYEOF'
-          import boto3
-          import os
-          from botocore.client import Config
+          # Construct the public URL (same format as R2_PUBLIC_URL in config.php)
+          # R2_PUBLIC_URL format: https://pub-ACCOUNTID.r2.dev
+          # File path: /jobs/JOB_ID/final.mp4
           
-          job_id = os.environ['JOB_ID']
-          bucket = os.environ['R2_BUCKET']
-          endpoint = os.environ['R2_ENDPOINT']
-          access_key = os.environ['R2_ACCESS_KEY']
-          secret_key = os.environ['R2_SECRET_KEY']
+          # Extract account ID from endpoint
+          ENDPOINT="${{ github.event.inputs.r2_endpoint }}"
+          ACCOUNT_ID=$(echo "$ENDPOINT" | sed 's|https://||' | sed 's|\.r2\.cloudflarestorage\.com||')
           
-          s3 = boto3.client(
-              's3',
-              endpoint_url=endpoint,
-              aws_access_key_id=access_key,
-              aws_secret_access_key=secret_key,
-              config=Config(signature_version='s3v4'),
-              verify=False  # Disable SSL verification for R2
-          )
+          PUBLIC_URL="https://pub-${ACCOUNT_ID}.r2.dev"
+          FILE_PATH="/jobs/${{ github.event.inputs.job_id }}/final.mp4"
           
-          key = f"jobs/{job_id}/final.mp4"
-          print(f"Downloading s3://{bucket}/{key}")
-          s3.download_file(bucket, key, 'final.mp4')
-          print("Download complete!")
-          PYEOF
+          echo "Downloading from: ${PUBLIC_URL}${FILE_PATH}"
+          wget -q -O final.mp4 "${PUBLIC_URL}${FILE_PATH}" || {
+            echo "ERROR: Failed to download final.mp4"
+            echo "URL attempted: ${PUBLIC_URL}${FILE_PATH}"
+            exit 1
+          }
           
-          python download_from_r2.py
-        env:
-          JOB_ID: ${{ github.event.inputs.job_id }}
-          R2_BUCKET: ${{ github.event.inputs.r2_bucket }}
-          R2_ENDPOINT: ${{ github.event.inputs.r2_endpoint }}
-          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ls -lh final.mp4
+          echo "Download complete!"
           
       # ─── TRANSCRIBE WITH WHISPER ───
       - name: Transcribe audio with Whisper
@@ -165,8 +153,6 @@ jobs:
           HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=s=x:p=0 final.mp4)
           echo "Input dimensions: ${WIDTH}x${HEIGHT}"
           
-          touch logo.png
-          
           ffmpeg -y \
             -i final.mp4 \
             -filter_complex "\
@@ -190,44 +176,36 @@ jobs:
           echo "TikTok video rendered successfully!"
           ls -lh tiktok.mp4
 
-      # ─── UPLOAD TO R2 ───
+      # ─── UPLOAD TO R2 (via S3 API with proper endpoint) ───
       - name: Upload tiktok.mp4 to R2
-        run: |
-          cat > upload_to_r2.py << 'PYEOF'
-          import boto3
-          import os
-          from botocore.client import Config
-          
-          job_id = os.environ['JOB_ID']
-          bucket = os.environ['R2_BUCKET']
-          endpoint = os.environ['R2_ENDPOINT']
-          access_key = os.environ['R2_ACCESS_KEY']
-          secret_key = os.environ['R2_SECRET_KEY']
-          
-          s3 = boto3.client(
-              's3',
-              endpoint_url=endpoint,
-              aws_access_key_id=access_key,
-              aws_secret_access_key=secret_key,
-              config=Config(signature_version='s3v4'),
-              verify=False
-          )
-          
-          key = f"jobs/{job_id}/tiktok.mp4"
-          print(f"Uploading to s3://{bucket}/{key}")
-          s3.upload_file('tiktok.mp4', bucket, key)
-          print("Upload complete!")
-          PYEOF
-          
-          python upload_to_r2.py
         env:
-          JOB_ID: ${{ github.event.inputs.job_id }}
-          R2_BUCKET: ${{ github.event.inputs.r2_bucket }}
-          R2_ENDPOINT: ${{ github.event.inputs.r2_endpoint }}
-          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_EC2_METADATA_DISABLED: 'true'
+        run: |
+          pip install awscli
+          
+          # Construct the proper S3 endpoint URL
+          # R2 needs: https://BUCKET.ACCOUNTID.r2.cloudflarestorage.com
+          ENDPOINT="${{ github.event.inputs.r2_endpoint }}"
+          BUCKET="${{ github.event.inputs.r2_bucket }}"
+          ACCOUNT_ID=$(echo "$ENDPOINT" | sed 's|https://||' | sed 's|\.r2\.cloudflarestorage\.com||')
+          
+          S3_ENDPOINT="https://${ACCOUNT_ID}.r2.cloudflarestorage.com"
+          
+          echo "Uploading to bucket: ${BUCKET}"
+          echo "Endpoint: ${S3_ENDPOINT}"
+          
+          aws s3 cp ./tiktok.mp4 \
+            "s3://${BUCKET}/jobs/${{ github.event.inputs.job_id }}/tiktok.mp4" \
+            --endpoint-url "${S3_ENDPOINT}" \
+            --region auto \
+            --no-verify-ssl \
+            --acl public-read
+          
+          echo "Upload complete!"
           
       # ─── CLEANUP ───
       - name: Cleanup
         if: always()
-        run: rm -f final.mp4 tiktok.mp4 transcription.json tiktok_captions.ass logo.png
+        run: rm -f final.mp4 tiktok.mp4 transcription.json tiktok_captions.ass

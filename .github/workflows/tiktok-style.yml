@@ -214,4 +214,85 @@ jobs:
               "-i", "logo.png",  # Will be downloaded below
               "-filter_complex", filter_complex,
               "-map", "[final]",
-             
+              "-map", "0:a",
+              "-af", afilters,
+              "-c:v", "libx264",
+              "-preset", "fast",
+              "-crf", "23",
+              "-c:a", "aac",
+              "-b:a", "192k",
+              "-movflags", "+faststart",
+              "-pix_fmt", "yuv420p",
+              "tiktok.mp4"
+          ]
+
+          # If no logo, simplify
+          if not LOGO_URL or LOGO_URL == "none":
+              filters_no_logo = []
+              base = "[scaled]"
+              
+              # Boom effect without logo
+              boom_simple = (
+                  f"{base}split[b1][b2];"
+                  f"[b2]trim=duration={BOOM_DURATION},setpts=PTS-STARTPTS,"
+                  f"zoompan=z='min(zoom+0.05,1.5)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920,"
+                  f"fade=t=out:st={BOOM_DURATION-0.1}:d=0.1[be];"
+                  f"[b1]trim=start={BOOM_DURATION},setpts=PTS-STARTPTS[bm];"
+                  f"[be][bm]concat=n=2:v=1:a=0[bn]"
+              )
+              filters_no_logo.append(boom_simple)
+              filters_no_logo.append("[bn]subtitles=tiktok_captions.ass:force_style='FontSize=48,Outline=3,Shadow=0,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Bold=1'[final]")
+              
+              filter_complex = ";".join(filters_no_logo)
+              cmd = [
+                  "ffmpeg", "-y",
+                  "-i", "final.mp4",
+                  "-filter_complex", filter_complex,
+                  "-map", "[final]",
+                  "-map", "0:a",
+                  "-af", afilters,
+                  "-c:v", "libx264",
+                  "-preset", "fast",
+                  "-crf", "23",
+                  "-c:a", "aac",
+                  "-b:a", "192k",
+                  "-movflags", "+faststart",
+                  "-pix_fmt", "yuv420p",
+                  "tiktok.mp4"
+              ]
+
+          print("Running:", " ".join(cmd))
+          result = subprocess.run(cmd, capture_output=True, text=True)
+          print(result.stdout)
+          if result.returncode != 0:
+              print("FFmpeg ERROR:", result.stderr)
+              raise RuntimeError("FFmpeg failed")
+              
+          print("TikTok video rendered successfully!")
+          PYEOF
+          
+          # Download logo if exists
+          if [ -n "${{ secrets.TIKTOK_LOGO_URL }}" ]; then
+            curl -L -o logo.png "${{ secrets.TIKTOK_LOGO_URL }}"
+          else
+            # Create a dummy transparent logo
+            convert -size 100x100 xc:transparent logo.png 2>/dev/null || touch logo.png
+          fi
+          
+          python render_tiktok.py
+
+      # ─── UPLOAD TO R2 ───
+      - name: Upload tiktok.mp4 to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          aws s3 cp ./tiktok.mp4 s3://${{ github.event.inputs.r2_bucket }}/jobs/${{ github.event.inputs.job_id }}/tiktok.mp4 \
+            --endpoint-url ${{ github.event.inputs.r2_endpoint }} \
+            --region auto \
+            --acl public-read
+          
+      # ─── CLEANUP ───
+      - name: Cleanup
+        if: always()
+        run: rm -f final.mp4 tiktok.mp4 transcription.json tiktok_captions.ass logo.png

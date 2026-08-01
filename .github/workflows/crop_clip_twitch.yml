@@ -18,6 +18,9 @@ on:
       vod_url:
         description: "Twitch VOD URL"
         required: true
+      video_id:
+        description: "Video ID (included to prevent 422 API errors from legacy payload)"
+        required: false
 
 jobs:
   crop-clip-twitch:
@@ -47,6 +50,7 @@ jobs:
           START_TIME: ${{ github.event.inputs.start_time }}
           END_TIME: ${{ github.event.inputs.end_time }}
           VOD_URL: ${{ github.event.inputs.vod_url }}
+          VIDEO_ID: ${{ github.event.inputs.video_id }}
         run: |
           python scripts/crop_clip_twitch.py \
             --job-id "$JOB_ID" \

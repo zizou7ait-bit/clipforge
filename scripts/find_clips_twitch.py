@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import requests
+import google.generativeai as genai
 from google import genai
 
 # Read environment variables passed from GitHub Actions

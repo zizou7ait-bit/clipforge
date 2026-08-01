@@ -32,19 +32,44 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu-core
-          pip install openai-whisper pillow numpy
+          pip install openai-whisper pillow numpy boto3
           
       # ─── DOWNLOAD FINAL VIDEO FROM R2 ───
       - name: Download final.mp4 from R2
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          pip install awscli
-          aws configure set default.s3.signature_version s3v4
-          aws s3 cp s3://${{ github.event.inputs.r2_bucket }}/jobs/${{ github.event.inputs.job_id }}/final.mp4 ./final.mp4 \
-            --endpoint-url ${{ github.event.inputs.r2_endpoint }} \
-            --region auto
+          cat > download_from_r2.py << 'PYEOF'
+          import boto3
+          import os
+          from botocore.client import Config
+          
+          job_id = os.environ['JOB_ID']
+          bucket = os.environ['R2_BUCKET']
+          endpoint = os.environ['R2_ENDPOINT']
+          access_key = os.environ['R2_ACCESS_KEY']
+          secret_key = os.environ['R2_SECRET_KEY']
+          
+          s3 = boto3.client(
+              's3',
+              endpoint_url=endpoint,
+              aws_access_key_id=access_key,
+              aws_secret_access_key=secret_key,
+              config=Config(signature_version='s3v4'),
+              verify=False  # Disable SSL verification for R2
+          )
+          
+          key = f"jobs/{job_id}/final.mp4"
+          print(f"Downloading s3://{bucket}/{key}")
+          s3.download_file(bucket, key, 'final.mp4')
+          print("Download complete!")
+          PYEOF
+          
+          python download_from_r2.py
+        env:
+          JOB_ID: ${{ github.event.inputs.job_id }}
+          R2_BUCKET: ${{ github.event.inputs.r2_bucket }}
+          R2_ENDPOINT: ${{ github.event.inputs.r2_endpoint }}
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           
       # ─── TRANSCRIBE WITH WHISPER ───
       - name: Transcribe audio with Whisper
@@ -96,7 +121,6 @@ jobs:
           lines.append("[Events]")
           lines.append("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text")
 
-          # Collect all words with timestamps
           words = []
           for seg in data.get('segments', []):
               for w in seg.get('words', []):
@@ -108,7 +132,6 @@ jobs:
                           'end': w['end'] * 1000
                       })
 
-          # Group into chunks of 4-5 words per caption line
           chunk_size = 4
           for i in range(0, len(words), chunk_size):
               chunk = words[i:i+chunk_size]
@@ -118,7 +141,6 @@ jobs:
               line_start = chunk[0]['start']
               line_end = chunk[-1]['end']
               
-              # Build karaoke text: each word highlighted when spoken
               text_parts = []
               for w in chunk:
                   duration_ms = w['end'] - w['start']
@@ -132,25 +154,19 @@ jobs:
           with open('tiktok_captions.ass', 'w', encoding='utf-8') as f:
               f.write('\n'.join(lines))
               
-          print(f"Generated {len(words)} words across caption lines")
+          print(f"Generated captions with {len(words)} words")
           PYEOF
           python generate_captions.py
 
       # ─── RENDER TIKTOK VIDEO ───
       - name: Render TikTok video with effects
         run: |
-          # Get video dimensions
           WIDTH=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=s=x:p=0 final.mp4)
           HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=s=x:p=0 final.mp4)
           echo "Input dimensions: ${WIDTH}x${HEIGHT}"
           
-          # Create logo placeholder
           touch logo.png
           
-          # Single FFmpeg command with all TikTok effects
-          # 1. Scale to 9:16 with blurred background
-          # 2. Add captions
-          # 3. Normalize audio
           ffmpeg -y \
             -i final.mp4 \
             -filter_complex "\
@@ -176,15 +192,40 @@ jobs:
 
       # ─── UPLOAD TO R2 ───
       - name: Upload tiktok.mp4 to R2
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          aws s3 cp ./tiktok.mp4 s3://${{ github.event.inputs.r2_bucket }}/jobs/${{ github.event.inputs.job_id }}/tiktok.mp4 \
-            --endpoint-url ${{ github.event.inputs.r2_endpoint }} \
-            --region auto \
-            --acl public-read
-          echo "Upload complete!"
+          cat > upload_to_r2.py << 'PYEOF'
+          import boto3
+          import os
+          from botocore.client import Config
+          
+          job_id = os.environ['JOB_ID']
+          bucket = os.environ['R2_BUCKET']
+          endpoint = os.environ['R2_ENDPOINT']
+          access_key = os.environ['R2_ACCESS_KEY']
+          secret_key = os.environ['R2_SECRET_KEY']
+          
+          s3 = boto3.client(
+              's3',
+              endpoint_url=endpoint,
+              aws_access_key_id=access_key,
+              aws_secret_access_key=secret_key,
+              config=Config(signature_version='s3v4'),
+              verify=False
+          )
+          
+          key = f"jobs/{job_id}/tiktok.mp4"
+          print(f"Uploading to s3://{bucket}/{key}")
+          s3.upload_file('tiktok.mp4', bucket, key)
+          print("Upload complete!")
+          PYEOF
+          
+          python upload_to_r2.py
+        env:
+          JOB_ID: ${{ github.event.inputs.job_id }}
+          R2_BUCKET: ${{ github.event.inputs.r2_bucket }}
+          R2_ENDPOINT: ${{ github.event.inputs.r2_endpoint }}
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           
       # ─── CLEANUP ───
       - name: Cleanup

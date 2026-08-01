@@ -3,7 +3,7 @@ name: Find Clips (Twitch)
 on:
   workflow_dispatch:
     inputs:
-      twitch_url:
+      vod_url:
         description: "Twitch VOD URL to analyze"
         required: true
       job_id:
@@ -35,6 +35,6 @@ jobs:
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
           R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
           JOB_ID: ${{ github.event.inputs.job_id }}
-          TWITCH_URL: ${{ github.event.inputs.twitch_url }}
+          TWITCH_URL: ${{ github.event.inputs.vod_url }}
         run: |
           python scripts/find_clips_twitch.py "$TWITCH_URL" "$JOB_ID"

@@ -1,68 +1,62 @@
 import os
 import sys
 import json
-import requests
-from google import genai
-
-# Read environment variables passed from GitHub Actions first
-twitch_url = os.environ.get("TWITCH_URL")
-job_id = os.environ.get("JOB_ID")
-gemini_api_key = os.environ.get("GEMINI_API_KEY")
-
-if not twitch_url or not job_id:
-    print("[ERROR] Missing TWITCH_URL or JOB_ID environment variables.")
-    sys.exit(1)
-
-print(f"[INFO] Job: {job_id}")
-print(f"[INFO] VOD: {twitch_url}")
-
-# Extract Video ID from URL
-try:
-    vod_id = twitch_url.split("/videos/")[1].split("?")[0]
-except Exception as e:
-    print(f"[ERROR] Invalid Twitch VOD URL format: {twitch_url}")
-    sys.exit(1)
-
-print(f"[INFO] Extracted VOD ID: {vod_id}")
-
-# Safe chat downloader wrapper or fallback simulation to prevent KeyError crash
-try:
-    from chat_downloader import ChatDownloader
-    print("[INFO] Attempting to download chat replay...")
-    chat = ChatDownloader().get_chat(twitch_url)
-    messages = []
-    for message in chat:
-        messages.append(message)
-    print(f"[INFO] Successfully downloaded {len(messages)} chat messages.")
-except Exception as e:
-    print(f"[WARNING] Could not fetch chat via chat-downloader ({e}). Proceeding with fallback mode.")
-    messages = []
-
-# Initialize Gemini Client using the modern SDK package with the proper variable defined
-client = genai.Client(api_key=gemini_api_key)
-
-# Generate a mock/structured JSON clips output so pipeline doesn't break
-# (This ensures R2 gets a valid clips.json so your dashboard unlocks)
-sample_clips = [
-    {
-        "title": "Highlight 1: Intro / Stream Start",
-        "start": "00:01:00",
-        "end": "00:02:00",
-        "description": "Generated fallback highlight segment."
-    }
-]
-
-os.makedirs("output", exist_ok=True)
-output_path = os.path.join("output", "clips.json")
-with open(output_path, "w") as f:
-    json.dump(sample_clips, f, indent=4)
-
-print("[INFO] clips.json generated successfully. Uploading to R2...")
-
-# Cloudflare R2 Upload block via environment variables
+import subprocess
 import boto3
 from botocore.client import Config
 
+# 1. Load Environment Variables
+twitch_url = os.environ.get("TWITCH_URL")
+job_id = os.environ.get("JOB_ID")
+
+if not twitch_url or not job_id:
+    print("[ERROR] Missing TWITCH_URL or JOB_ID")
+    sys.exit(1)
+
+os.makedirs("output", exist_ok=True)
+json_output_path = os.path.join("output", "clips.json")
+video_output_path = os.path.join("output", "clip_1.mp4")
+
+print(f"[INFO] Processing Job: {job_id} for VOD: {twitch_url}")
+
+# 2. Define the real clip data (Normally Gemini AI would generate these timestamps)
+# For this script, we are hardcoding a 30-second test clip from the very beginning of the VOD.
+clips_data = [
+    {
+        "title": "Stream Highlight",
+        "start": "00:00:10",
+        "end": "00:00:40",
+        "description": "The first 30 seconds of the stream."
+    }
+]
+
+# Save the JSON locally
+with open(json_output_path, "w") as f:
+    json.dump(clips_data, f, indent=4)
+
+# 3. Download and Cut the Video using yt-dlp and ffmpeg
+print("[INFO] Downloading and cutting video segment...")
+start_time = clips_data[0]["start"]
+end_time = clips_data[0]["end"]
+
+# This yt-dlp command downloads ONLY the specific timestamp to save time/server space
+command = [
+    "yt-dlp",
+    "--download-sections", f"*{start_time}-{end_time}",
+    "--force-keyframes-at-cuts",
+    "-o", video_output_path,
+    twitch_url
+]
+
+try:
+    subprocess.run(command, check=True)
+    print("[INFO] Video successfully cut and saved.")
+except subprocess.CalledProcessError as e:
+    print(f"[ERROR] Failed to download/cut video: {e}")
+    sys.exit(1)
+
+# 4. Upload to Cloudflare R2
+print("[INFO] Uploading files to Cloudflare R2...")
 s3 = boto3.client(
     's3',
     endpoint_url=f"https://{os.environ.get('R2_ACCOUNT_ID')}.r2.cloudflarestorage.com",
@@ -70,14 +64,18 @@ s3 = boto3.client(
     aws_secret_access_key=os.environ.get('R2_SECRET_ACCESS_KEY'),
     config=Config(signature_version='s3v4'),
 )
-
 bucket_name = os.environ.get('R2_BUCKET_NAME')
-r2_key = f"jobs/{job_id}/clips.json"
 
-s3.upload_file(output_path, bucket_name, r2_key)
-print(f"[INFO] Uploaded {r2_key} to bucket {bucket_name} successfully!")
-print("[DEBUG] Checking R2 Environment Variables...")
-print(f"R2_ACCOUNT_ID present: {bool(os.environ.get('R2_ACCOUNT_ID'))}")
-print(f"R2_ACCESS_KEY_ID present: {bool(os.environ.get('R2_ACCESS_KEY_ID'))}")
-print(f"R2_SECRET_ACCESS_KEY present: {bool(os.environ.get('R2_SECRET_ACCESS_KEY'))}")
-print(f"R2_BUCKET_NAME present: {bool(os.environ.get('R2_BUCKET_NAME'))}")
+# Upload JSON
+r2_json_key = f"jobs/{job_id}/clips.json"
+s3.upload_file(json_output_path, bucket_name, r2_json_key)
+
+# Upload MP4 Video
+r2_video_key = f"jobs/{job_id}/clip_1.mp4"
+if os.path.exists(video_output_path):
+    s3.upload_file(video_output_path, bucket_name, r2_video_key)
+    print(f"[INFO] Successfully uploaded {r2_video_key}")
+else:
+    print("[ERROR] Video file was not found for upload.")
+
+print("[SUCCESS] Job complete!")

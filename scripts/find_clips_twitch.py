@@ -76,3 +76,8 @@ r2_key = f"jobs/{job_id}/clips.json"
 
 s3.upload_file(output_path, bucket_name, r2_key)
 print(f"[INFO] Uploaded {r2_key} to bucket {bucket_name} successfully!")
+print("[DEBUG] Checking R2 Environment Variables...")
+print(f"R2_ACCOUNT_ID present: {bool(os.environ.get('R2_ACCOUNT_ID'))}")
+print(f"R2_ACCESS_KEY_ID present: {bool(os.environ.get('R2_ACCESS_KEY_ID'))}")
+print(f"R2_SECRET_ACCESS_KEY present: {bool(os.environ.get('R2_SECRET_ACCESS_KEY'))}")
+print(f"R2_BUCKET_NAME present: {bool(os.environ.get('R2_BUCKET_NAME'))}")

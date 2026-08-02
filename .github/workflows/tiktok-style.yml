@@ -31,12 +31,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu-core
-          pip install openai-whisper pillow numpy boto3 urllib3
+          pip install openai-whisper pillow numpy boto3
 
       - name: Download final.mp4 from R2 public URL
         run: |
           ENDPOINT="${{ github.event.inputs.r2_endpoint }}"
           ACCOUNT_ID=$(echo "$ENDPOINT" | sed 's|https://||' | sed 's|\.r2\.cloudflarestorage\.com||')
+          echo "ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
           PUBLIC_URL="https://pub-${ACCOUNT_ID}.r2.dev"
           FILE_PATH="/jobs/${{ github.event.inputs.job_id }}/final.mp4"
           echo "Downloading: ${PUBLIC_URL}${FILE_PATH}"
@@ -139,77 +140,35 @@ jobs:
             tiktok.mp4
           ls -lh tiktok.mp4
 
-      - name: Upload to R2 (SSL bypass via custom pool manager)
+      - name: Upload to R2 (exact same boto3 code as find_clips_twitch.py)
         env:
-          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ github.event.inputs.r2_bucket }}
-          R2_ENDPOINT: ${{ github.event.inputs.r2_endpoint }}
           JOB_ID: ${{ github.event.inputs.job_id }}
         run: |
-          cat > upload_to_r2.py << 'PYEOF'
-          import os
-          import ssl
-          import boto3
+          cat > upload.py << 'PYEOF'
+          import os, boto3
           from botocore.client import Config
-          from urllib3 import PoolManager
-          import botocore.httpsession
 
-          # -------------------------------------------------------------------
-          # 1. Create a completely unverified SSL context
-          # -------------------------------------------------------------------
-          unverified_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-          unverified_ctx.check_hostname = False
-          unverified_ctx.verify_mode = ssl.CERT_NONE
+          # Extract account ID from the endpoint (already stored in GITHUB_ENV)
+          account_id = os.environ['ACCOUNT_ID']
 
-          # -------------------------------------------------------------------
-          # 2. Force botocore's URLLib3Session to use a pool manager with this context
-          # -------------------------------------------------------------------
-          original_init = botocore.httpsession.URLLib3Session.__init__
-          def patched_init(self, *args, **kwargs):
-              # Call original init, then replace the pool manager
-              original_init(self, *args, **kwargs)
-              self._pool_manager = PoolManager(
-                  ssl_context=unverified_ctx,
-                  cert_reqs=ssl.CERT_NONE,
-                  assert_hostname=False
-              )
-              self._pool_manager_kwargs = {
-                  'ssl_context': unverified_ctx,
-                  'cert_reqs': ssl.CERT_NONE,
-                  'assert_hostname': False
-              }
-          botocore.httpsession.URLLib3Session.__init__ = patched_init
-
-          # -------------------------------------------------------------------
-          # 3. Also disable all urllib3 warnings
-          # -------------------------------------------------------------------
-          import urllib3
-          urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-          # -------------------------------------------------------------------
-          # 4. Create the S3 client (verify=False still needed for other layers)
-          # -------------------------------------------------------------------
           s3 = boto3.client(
               's3',
-              endpoint_url=os.environ['R2_ENDPOINT'],
-              aws_access_key_id=os.environ['R2_ACCESS_KEY'],
-              aws_secret_access_key=os.environ['R2_SECRET_KEY'],
-              config=Config(
-                  signature_version='s3v4',
-                  s3={'addressing_style': 'path'}
-              ),
-              verify=False,
-              use_ssl=True
+              endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+              aws_access_key_id=os.environ['R2_ACCESS_KEY_ID'],
+              aws_secret_access_key=os.environ['R2_SECRET_ACCESS_KEY'],
+              config=Config(signature_version='s3v4')
           )
 
           bucket = os.environ['R2_BUCKET']
           key = f"jobs/{os.environ['JOB_ID']}/tiktok.mp4"
-          print(f"Uploading to {bucket}/{key}")
+          print(f"Uploading to s3://{bucket}/{key}")
           s3.upload_file('tiktok.mp4', bucket, key, ExtraArgs={'ACL': 'public-read'})
           print("Upload successful!")
           PYEOF
-          python upload_to_r2.py
+          python upload.py
 
       - name: Cleanup
         if: always()

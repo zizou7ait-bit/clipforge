@@ -30,18 +30,22 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core curl
-          pip install openai-whisper pillow numpy
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          pip install openai-whisper pillow numpy boto3
 
-      - name: Download final.mp4 from R2 public URL
+      - name: Extract account ID and set env vars
         run: |
           ENDPOINT="${{ github.event.inputs.r2_endpoint }}"
           ACCOUNT_ID=$(echo "$ENDPOINT" | sed 's|https://||' | sed 's|\.r2\.cloudflarestorage\.com||')
           echo "ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
           echo "R2_BUCKET=${{ github.event.inputs.r2_bucket }}" >> $GITHUB_ENV
           echo "JOB_ID=${{ github.event.inputs.job_id }}" >> $GITHUB_ENV
+          echo "Public URL: https://pub-${ACCOUNT_ID}.r2.dev"
+
+      - name: Download final.mp4 from R2 public URL
+        run: |
           PUBLIC_URL="https://pub-${ACCOUNT_ID}.r2.dev"
-          FILE_PATH="/jobs/${{ github.event.inputs.job_id }}/final.mp4"
+          FILE_PATH="/jobs/${JOB_ID}/final.mp4"
           echo "Downloading: ${PUBLIC_URL}${FILE_PATH}"
           wget -q -O final.mp4 "${PUBLIC_URL}${FILE_PATH}" || {
             echo "ERROR: Download failed"
@@ -142,21 +146,65 @@ jobs:
             tiktok.mp4
           ls -lh tiktok.mp4
 
-      - name: Upload to R2 via system curl (no Python SSL issues)
+      - name: Upload tiktok.mp4 via boto3 to S3 endpoint (patched SSL context)
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          # Use system curl (not Python) for SSL
-          # Upload to path-style S3 endpoint with --insecure flag
-          curl --insecure -X PUT \
-            -H "Content-Type: video/mp4" \
-            -H "x-amz-acl: public-read" \
-            --upload-file tiktok.mp4 \
-            --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" \
-            "https://${ACCOUNT_ID}.r2.cloudflarestorage.com/${R2_BUCKET}/jobs/${JOB_ID}/tiktok.mp4"
+          cat > upload_s3.py << 'PYEOF'
+          import os, ssl, boto3
+          from botocore.client import Config
 
-          echo "Upload complete!"
+          # ─── Force urllib3 to skip SSL ───
+          # This must be done before ANY urllib3 import inside boto3
+          import urllib3
+          urllib3.disable_warnings()
+
+          # Monkey-patch the SSL context CREATION function, not the pool manager
+          import urllib3.util.ssl_
+          original_create_urllib3_context = urllib3.util.ssl_.create_urllib3_context
+
+          def unverified_context(*args, **kwargs):
+              ctx = original_create_urllib3_context(*args, **kwargs)
+              ctx.check_hostname = False
+              ctx.verify_mode = ssl.CERT_NONE
+              return ctx
+
+          urllib3.util.ssl_.create_urllib3_context = unverified_context
+
+          # Now also patch ssl module globally
+          ssl._create_default_https_context = ssl._create_unverified_context
+
+          account_id = os.environ['ACCOUNT_ID']
+          bucket = os.environ['R2_BUCKET']
+          job_id = os.environ['JOB_ID']
+          access_key = os.environ['R2_ACCESS_KEY_ID']
+          secret_key = os.environ['R2_SECRET_ACCESS_KEY']
+
+          endpoint = f"https://{account_id}.r2.cloudflarestorage.com"
+          key = f"jobs/{job_id}/tiktok.mp4"
+
+          print(f"Endpoint: {endpoint}")
+          print(f"Bucket: {bucket}")
+          print(f"Key: {key}")
+
+          s3 = boto3.client(
+              's3',
+              endpoint_url=endpoint,
+              aws_access_key_id=access_key,
+              aws_secret_access_key=secret_key,
+              config=Config(
+                  signature_version='s3v4',
+                  s3={'addressing_style': 'path'}
+              ),
+              verify=False
+          )
+
+          print(f"Uploading tiktok.mp4 ({os.path.getsize('tiktok.mp4')} bytes)...")
+          s3.upload_file('tiktok.mp4', bucket, key, ExtraArgs={'ACL': 'public-read'})
+          print("Upload successful!")
+          PYEOF
+          python upload_s3.py
 
       - name: Cleanup
         if: always()

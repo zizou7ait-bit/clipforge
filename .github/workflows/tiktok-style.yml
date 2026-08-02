@@ -30,8 +30,8 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core awscli
-          pip install openai-whisper pillow numpy
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          pip install openai-whisper pillow numpy awscli
 
       - name: Download final.mp4 from R2 public URL
         run: |
@@ -140,26 +140,70 @@ jobs:
             tiktok.mp4
           ls -lh tiktok.mp4
 
-      - name: Upload to R2 (virtual hosted style + SSL bypass)
+      - name: Upload to R2 via curl (HTTP API, no SSL issues)
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_CA_BUNDLE: /dev/null
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ github.event.inputs.r2_bucket }}
           JOB_ID: ${{ github.event.inputs.job_id }}
         run: |
-          # Virtual-hosted endpoint: https://<bucket>.<accountid>.r2.cloudflarestorage.com
-          VHOST_ENDPOINT="https://${R2_BUCKET}.${ACCOUNT_ID}.r2.cloudflarestorage.com"
-          echo "Uploading to ${VHOST_ENDPOINT}"
+          cat > upload_via_curl.py << 'PYEOF'
+          import os, hashlib, hmac, datetime, requests
 
-          aws s3 cp ./tiktok.mp4 \
-            "s3://${R2_BUCKET}/jobs/${JOB_ID}/tiktok.mp4" \
-            --endpoint-url "${VHOST_ENDPOINT}" \
-            --region auto \
-            --no-verify-ssl \
-            --acl public-read
+          account_id = os.environ['ACCOUNT_ID']
+          access_key = os.environ['R2_ACCESS_KEY']
+          secret_key = os.environ['R2_SECRET_KEY']
+          bucket = os.environ['R2_BUCKET']
+          job_id = os.environ['JOB_ID']
+          file_path = 'tiktok.mp4'
+          key = f"jobs/{job_id}/tiktok.mp4"
 
-          echo "Upload complete!"
+          # Read file
+          with open(file_path, 'rb') as f:
+              body = f.read()
+
+          content_type = 'video/mp4'
+          date = datetime.datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT')
+          
+          # Construct the S3 API URL (path-style)
+          url = f"https://{account_id}.r2.cloudflarestorage.com/{bucket}/{key}"
+          
+          # Build the string to sign
+          string_to_sign = f"PUT\n\n{content_type}\n{date}\n/{bucket}/{key}"
+          
+          # Sign with HMAC-SHA1
+          signature = hmac.new(
+              secret_key.encode('utf-8'),
+              string_to_sign.encode('utf-8'),
+              hashlib.sha1
+          ).digest()
+          
+          # Base64 encode the signature
+          import base64
+          signature_b64 = base64.b64encode(signature).decode('utf-8')
+          
+          headers = {
+              'Content-Type': content_type,
+              'Date': date,
+              'Authorization': f'AWS {access_key}:{signature_b64}',
+              'x-amz-acl': 'public-read'
+          }
+          
+          print(f"Uploading to: {url}")
+          print(f"File size: {len(body)} bytes")
+          
+          response = requests.put(url, data=body, headers=headers, verify=False)
+          
+          if response.status_code in [200, 201]:
+              print(f"Upload successful! Status: {response.status_code}")
+          else:
+              print(f"Upload failed: {response.status_code}")
+              print(response.text)
+              raise Exception(f"Upload failed with status {response.status_code}")
+          PYEOF
+          
+          pip install requests
+          python upload_via_curl.py
 
       - name: Cleanup
         if: always()

@@ -30,14 +30,16 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core
-          pip install openai-whisper pillow numpy awscli
+          sudo apt-get install -y ffmpeg fonts-dejavu-core curl
+          pip install openai-whisper pillow numpy
 
       - name: Download final.mp4 from R2 public URL
         run: |
           ENDPOINT="${{ github.event.inputs.r2_endpoint }}"
           ACCOUNT_ID=$(echo "$ENDPOINT" | sed 's|https://||' | sed 's|\.r2\.cloudflarestorage\.com||')
           echo "ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
+          echo "R2_BUCKET=${{ github.event.inputs.r2_bucket }}" >> $GITHUB_ENV
+          echo "JOB_ID=${{ github.event.inputs.job_id }}" >> $GITHUB_ENV
           PUBLIC_URL="https://pub-${ACCOUNT_ID}.r2.dev"
           FILE_PATH="/jobs/${{ github.event.inputs.job_id }}/final.mp4"
           echo "Downloading: ${PUBLIC_URL}${FILE_PATH}"
@@ -140,70 +142,21 @@ jobs:
             tiktok.mp4
           ls -lh tiktok.mp4
 
-      - name: Upload to R2 via curl (HTTP API, no SSL issues)
+      - name: Upload to R2 via system curl (no Python SSL issues)
         env:
-          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET: ${{ github.event.inputs.r2_bucket }}
-          JOB_ID: ${{ github.event.inputs.job_id }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          cat > upload_via_curl.py << 'PYEOF'
-          import os, hashlib, hmac, datetime, requests
+          # Use system curl (not Python) for SSL
+          # Upload to path-style S3 endpoint with --insecure flag
+          curl --insecure -X PUT \
+            -H "Content-Type: video/mp4" \
+            -H "x-amz-acl: public-read" \
+            --upload-file tiktok.mp4 \
+            --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" \
+            "https://${ACCOUNT_ID}.r2.cloudflarestorage.com/${R2_BUCKET}/jobs/${JOB_ID}/tiktok.mp4"
 
-          account_id = os.environ['ACCOUNT_ID']
-          access_key = os.environ['R2_ACCESS_KEY']
-          secret_key = os.environ['R2_SECRET_KEY']
-          bucket = os.environ['R2_BUCKET']
-          job_id = os.environ['JOB_ID']
-          file_path = 'tiktok.mp4'
-          key = f"jobs/{job_id}/tiktok.mp4"
-
-          # Read file
-          with open(file_path, 'rb') as f:
-              body = f.read()
-
-          content_type = 'video/mp4'
-          date = datetime.datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT')
-          
-          # Construct the S3 API URL (path-style)
-          url = f"https://{account_id}.r2.cloudflarestorage.com/{bucket}/{key}"
-          
-          # Build the string to sign
-          string_to_sign = f"PUT\n\n{content_type}\n{date}\n/{bucket}/{key}"
-          
-          # Sign with HMAC-SHA1
-          signature = hmac.new(
-              secret_key.encode('utf-8'),
-              string_to_sign.encode('utf-8'),
-              hashlib.sha1
-          ).digest()
-          
-          # Base64 encode the signature
-          import base64
-          signature_b64 = base64.b64encode(signature).decode('utf-8')
-          
-          headers = {
-              'Content-Type': content_type,
-              'Date': date,
-              'Authorization': f'AWS {access_key}:{signature_b64}',
-              'x-amz-acl': 'public-read'
-          }
-          
-          print(f"Uploading to: {url}")
-          print(f"File size: {len(body)} bytes")
-          
-          response = requests.put(url, data=body, headers=headers, verify=False)
-          
-          if response.status_code in [200, 201]:
-              print(f"Upload successful! Status: {response.status_code}")
-          else:
-              print(f"Upload failed: {response.status_code}")
-              print(response.text)
-              raise Exception(f"Upload failed with status {response.status_code}")
-          PYEOF
-          
-          pip install requests
-          python upload_via_curl.py
+          echo "Upload complete!"
 
       - name: Cleanup
         if: always()

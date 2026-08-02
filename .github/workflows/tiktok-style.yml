@@ -31,8 +31,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu-core
-          # Added boto3 so r2_upload.py can authenticate and upload to Cloudflare
-          pip install openai-whisper pillow numpy boto3
+          pip install openai-whisper pillow numpy boto3 urllib3
 
       - name: Extract account ID
         run: |
@@ -149,12 +148,46 @@ jobs:
         env:
           R2_ACCOUNT_ID: ${{ env.ACCOUNT_ID }}
           R2_BUCKET_NAME: ${{ github.event.inputs.r2_bucket }}
-          # These must be set in your GitHub Repository Secrets
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ github.event.inputs.r2_endpoint }}
         run: |
           export PYTHONPATH=$PYTHONPATH:$(pwd)
-          python -c "import scripts.r2_upload as r2; r2.upload_file('tiktok.mp4', 'jobs/${{ env.JOB_ID }}/tiktok.mp4')"
+          python -c "
+          import os
+          import boto3
+          from botocore.config import Config
+          from botocore.exceptions import SSLError
+
+          account_id = os.environ['R2_ACCOUNT_ID']
+          access_key = os.environ['R2_ACCESS_KEY_ID']
+          secret_key = os.environ['R2_SECRET_ACCESS_KEY']
+          bucket_name = os.environ['R2_BUCKET_NAME']
+          endpoint_url = f'https://{account_id}.r2.cloudflarestorage.com'
+
+          print(f'Connecting to R2 Endpoint: {endpoint_url}')
+          
+          # Force minimum TLS version configuration via urllib3 adapter or standard botocore config
+          client = boto3.client(
+              's3',
+              endpoint_url=endpoint_url,
+              aws_access_key_id=access_key,
+              aws_secret_access_key=secret_key,
+              config=Config(
+                  signature_version='s3v4',
+                  s3={'addressing_style': 'path'},
+                  retries={'max_attempts': 3, 'mode': 'standard'}
+              )
+          )
+
+          try:
+              print('Starting multipart upload/transfer...')
+              client.upload_file('tiktok.mp4', bucket_name, f'jobs/${{ env.JOB_ID }}/tiktok.mp4')
+              print('Successfully uploaded tiktok.mp4 to R2!')
+          except Exception as e:
+              print('Upload failed with error:', type(e), e)
+              raise e
+          "
 
       - name: Cleanup
         if: always()

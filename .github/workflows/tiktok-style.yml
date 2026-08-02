@@ -151,7 +151,12 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          python .github/scripts/upload_to_r2.py tiktok.mp4 "jobs/${JOB_ID}/tiktok.mp4"
+          export PYTHONPATH=$PYTHONPATH:$(pwd)
+          python -c "
+          from scripts.r2_upload import upload_file
+          upload_file('tiktok.mp4', 'jobs/${{ env.JOB_ID }}/tiktok.mp4')
+          print('[DONE] Upload complete')
+          "
 
       - name: Cleanup
         if: always()

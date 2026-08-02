@@ -31,7 +31,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu-core
-          pip install openai-whisper pillow numpy
+          # Added boto3 so r2_upload.py can authenticate and upload to Cloudflare
+          pip install openai-whisper pillow numpy boto3
 
       - name: Extract account ID
         run: |
@@ -144,14 +145,17 @@ jobs:
             tiktok.mp4
           ls -lh tiktok.mp4
 
-      # Upload tiktok.mp4 as artifact so PHP can grab it
-      - name: Upload tiktok.mp4 as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: tiktok-${{ github.event.inputs.job_id }}
-          path: tiktok.mp4
-          retention-days: 1
+      - name: Upload tiktok.mp4 to Cloudflare R2
+        env:
+          R2_ACCOUNT_ID: ${{ env.ACCOUNT_ID }}
+          R2_BUCKET_NAME: ${{ github.event.inputs.r2_bucket }}
+          # These must be set in your GitHub Repository Secrets
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          export PYTHONPATH=$PYTHONPATH:$(pwd)
+          python -c "import scripts.r2_upload as r2; r2.upload_file('tiktok.mp4', 'jobs/${{ env.JOB_ID }}/tiktok.mp4')"
 
       - name: Cleanup
         if: always()
-        run: rm -f final.mp4 tiktok.mp4 transcription.json tiktok_captions.ass
+        run: rm -f final.mp4 tiktok.mp4 transcription.json tiktok_captions.ass generate_captions.py

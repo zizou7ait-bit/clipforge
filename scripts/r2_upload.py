@@ -23,7 +23,12 @@ def get_r2_client():
         endpoint_url=endpoint_url,
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
-        config=Config(signature_version="s3v4", retries={"max_attempts": 3, "mode": "standard"}),
+        # THIS IS THE FIX: Added s3={'addressing_style': 'path'} below
+        config=Config(
+            signature_version="s3v4", 
+            s3={'addressing_style': 'path'}, 
+            retries={"max_attempts": 3, "mode": "standard"}
+        ),
     )
 
 

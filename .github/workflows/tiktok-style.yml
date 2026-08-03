@@ -144,20 +144,52 @@ jobs:
             tiktok.mp4
           ls -lh tiktok.mp4
 
-      - name: Upload tiktok.mp4 to Cloudflare R2
+      - name: Upload tiktok.mp4 to Cloudflare R2 (via Worker)
         env:
-          R2_ACCOUNT_ID: ${{ env.ACCOUNT_ID }}
-          R2_BUCKET_NAME: ${{ github.event.inputs.r2_bucket }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_UPLOAD_SECRET: ${{ secrets.R2_UPLOAD_SECRET }}
         run: |
-          export PYTHONPATH=$PYTHONPATH:$(pwd)
-          python -c "
-          from scripts.r2_upload import upload_file
-          upload_file('tiktok.mp4', 'jobs/${{ env.JOB_ID }}/tiktok.mp4')
-          print('[DONE] Upload complete')
-          "
+          WORKER_URL="https://clipforge-uploader.zizou7ait.workers.dev"
+          R2_KEY="jobs/${JOB_ID}/tiktok.mp4"
+
+          echo "=== DEBUG: Upload step starting ==="
+          echo "Worker URL: ${WORKER_URL}"
+          echo "R2 Key: ${R2_KEY}"
+          echo "JOB_ID env var: ${JOB_ID}"
+          echo "Secret is set: $([ -n "$R2_UPLOAD_SECRET" ] && echo yes || echo NO -- MISSING)"
+
+          echo "=== DEBUG: Checking local file ==="
+          if [ ! -f tiktok.mp4 ]; then
+            echo "ERROR: tiktok.mp4 not found in working directory!"
+            ls -la
+            exit 1
+          fi
+          ls -lh tiktok.mp4
+          FILE_SIZE=$(stat -c%s tiktok.mp4 2>/dev/null || stat -f%z tiktok.mp4)
+          echo "File size (bytes): ${FILE_SIZE}"
+
+          echo "=== DEBUG: Sending request (verbose) ==="
+          HTTP_STATUS=$(curl -v -s -o response.txt -w "%{http_code}" \
+            -X POST "${WORKER_URL}" \
+            -H "X-Upload-Secret: ${R2_UPLOAD_SECRET}" \
+            -H "X-R2-Key: ${R2_KEY}" \
+            -H "Content-Type: video/mp4" \
+            --data-binary @tiktok.mp4 2> curl_verbose.log)
+
+          echo "=== DEBUG: curl verbose log ==="
+          cat curl_verbose.log
+
+          echo "=== DEBUG: Response body ==="
+          cat response.txt
+          echo ""
+          echo "=== DEBUG: HTTP status: ${HTTP_STATUS} ==="
+
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "ERROR: Upload failed with status ${HTTP_STATUS}"
+            exit 1
+          fi
+
+          echo "=== SUCCESS: Upload complete ==="
 
       - name: Cleanup
         if: always()
-        run: rm -f final.mp4 tiktok.mp4 transcription.json tiktok_captions.ass generate_captions.py
+        run: rm -f final.mp4 tiktok.mp4 transcription.json tiktok_captions.ass generate_captions.py curl_verbose.log response.txt

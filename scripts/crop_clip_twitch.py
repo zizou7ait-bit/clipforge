@@ -4,7 +4,7 @@ Download only a clip's time range from a Twitch VOD (not the whole VOD),
 then render it in one of two vertical layouts:
   - crop:     center crop to fill 9:16
   - blur_bg:  full stream scaled to fit, centered over a blurred background
-Uploads final.mp4 to R2.
+Uploads final clip to R2.
 
 Usage:
   python scripts/crop_clip_twitch.py --job-id <id> --clip-index <i> \
@@ -42,6 +42,7 @@ def download_section(vod_url: str, start: str, end: str, output_path: str) -> fl
         "yt-dlp",
         "-f", "best[height<=1080]",
         "--download-sections", section,
+        "--force-keyframes-at-cuts",
         "--merge-output-format", "mp4",
         "-o", output_path,
         vod_url,
@@ -72,13 +73,12 @@ def crop_to_vertical(input_path: str, output_path: str, pad_offset: float,
     ]
 
     if layout == "blur_bg":
-        # Full stream scaled to fit width in the middle, over a blurred,
-        # cropped-to-fill copy of the same video as the background "fog".
+        # Full stream scaled to fit width in the middle, over a blurred background
         filter_complex = (
-            "[0:v]split=2[bg][fg];"
-            "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
+            "[0:v]split=2[raw_bg][raw_fg];"
+            "[raw_bg]scale=1080:1920:force_original_aspect_ratio=increase,"
             "crop=1080:1920,gblur=sigma=30[bg];"
-            "[fg]scale=1080:-2:force_original_aspect_ratio=decrease[fg];"
+            "[raw_fg]scale=1080:-2:force_original_aspect_ratio=decrease[fg];"
             "[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[outv]"
         )
         video_cmd = [
@@ -87,11 +87,14 @@ def crop_to_vertical(input_path: str, output_path: str, pad_offset: float,
             "-map", "0:a?",
         ]
     elif layout == "crop":
+        # trunc(ih*9/16/2)*2 ensures an even width for yuv420p compliance
         video_cmd = [
             "-vf",
-            "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,"
+            "crop=trunc(ih*9/16/2)*2:ih:(iw-trunc(ih*9/16/2)*2)/2:0,"
             "scale=1080:1920:force_original_aspect_ratio=decrease,"
-            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",
+            "-map", "0:v:0",
+            "-map", "0:a?",
         ]
     else:
         raise ValueError(f"Unknown layout '{layout}', expected 'crop' or 'blur_bg'")
@@ -131,7 +134,8 @@ def main():
     print(f"[INFO] VOD: {args.vod_url}")
     print(f"[INFO] Layout: {args.layout}")
 
-    work_dir = f"/tmp/{args.job_id}"
+    # Unique work directory per clip index to isolate concurrent workers
+    work_dir = f"/tmp/{args.job_id}_clip_{args.clip_index}"
     os.makedirs(work_dir, exist_ok=True)
 
     section_video = f"{work_dir}/section.mp4"
@@ -141,7 +145,8 @@ def main():
         pad_offset = download_section(args.vod_url, args.start, args.end, section_video)
         crop_to_vertical(section_video, output_video, pad_offset, args.start, args.end, args.layout)
 
-        r2_key = f"jobs/{args.job_id}/final.mp4"
+        # Output distinct key per clip index to prevent overwriting
+        r2_key = f"jobs/{args.job_id}/clip_{args.clip_index}.mp4"
         public_url = upload_file(output_video, r2_key)
         print(f"[SUCCESS] Uploaded final video to: {public_url}")
 

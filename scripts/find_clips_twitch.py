@@ -1,14 +1,18 @@
-
 import os
 import sys
 import json
+import re
 import subprocess
 import boto3
 from botocore.client import Config
 
-# Load Environment Variables
+# ========== Load Environment Variables ==========
 twitch_url = os.environ.get("TWITCH_URL")
 job_id = os.environ.get("JOB_ID")
+# Optional manual time range — if both are set, we skip AI clip-finding
+# and just cut exactly this segment instead.
+start_time_env = os.environ.get("START_TIME", "").strip()
+end_time_env = os.environ.get("END_TIME", "").strip()
 
 if not twitch_url or not job_id:
     print("[ERROR] Missing TWITCH_URL or JOB_ID")
@@ -20,15 +24,72 @@ video_output_path = os.path.join("output", "clip_1.mp4")
 
 print(f"[INFO] Processing Job: {job_id} for VOD: {twitch_url}")
 
-# Define clip data wrapped in the "clips" object matching index.php expectations
+
+# ========== Time Helpers ==========
+def normalize_time(t):
+    """
+    Normalizes a loose time string like "1:12:5" or "72:05" into
+    "HH:MM:SS(.ms)" format expected by yt-dlp / ffmpeg.
+    """
+    t = t.strip()
+    ms = ""
+    if "." in t:
+        t, frac = t.split(".", 1)
+        ms = "." + frac
+
+    parts = t.split(":")
+    while len(parts) < 3:
+        parts.insert(0, "0")
+
+    parts = [p.zfill(2) for p in parts]
+    return ":".join(parts) + ms
+
+
+def is_valid_time(t):
+    return bool(re.match(r"^\d{1,2}(:\d{1,2}){1,2}(\.\d+)?$", t.strip()))
+
+
+def time_to_seconds(t):
+    t = normalize_time(t)
+    h, m, s = t.split(":")
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
+# ========== Determine Clip Range ==========
+use_manual_range = bool(start_time_env) and bool(end_time_env)
+
+if use_manual_range:
+    if not is_valid_time(start_time_env) or not is_valid_time(end_time_env):
+        print(f"[ERROR] Invalid manual time format: start={start_time_env} end={end_time_env}")
+        sys.exit(1)
+
+    start_time = normalize_time(start_time_env)
+    end_time = normalize_time(end_time_env)
+
+    if time_to_seconds(start_time) >= time_to_seconds(end_time):
+        print(f"[ERROR] end_time ({end_time}) must be after start_time ({start_time})")
+        sys.exit(1)
+
+    print(f"[INFO] Manual clip range requested: {start_time} - {end_time}")
+    clip_title = "Manual Clip"
+    clip_description = f"Manually selected segment from {start_time} to {end_time}."
+else:
+    # Fallback default clip (placeholder for AI-detected clip logic)
+    print("[INFO] No manual time range provided — using default segment.")
+    start_time = "00:00:10"
+    end_time = "00:00:40"
+    clip_title = "Stream Highlight"
+    clip_description = "The first 30 seconds of the stream."
+
+# Build clip data wrapped in the "clips" object matching index.php expectations
 clips_data = {
     "clips": [
         {
-            "title": "Stream Highlight",
-            "start": "00:00:10",
-            "end": "00:00:40",
-            "description": "The first 30 seconds of the stream.",
-            "video_file": "clip_1.mp4"
+            "title": clip_title,
+            "start": start_time,
+            "end": end_time,
+            "description": clip_description,
+            "video_file": "clip_1.mp4",
         }
     ]
 }
@@ -37,10 +98,9 @@ clips_data = {
 with open(json_output_path, "w") as f:
     json.dump(clips_data, f, indent=4)
 
-# Download and Cut the Video using yt-dlp and ffmpeg
+# ========== Download and Cut the Video using yt-dlp and ffmpeg ==========
 print("[INFO] Downloading and cutting video segment...")
-start_time = clips_data["clips"][0]["start"]
-end_time = clips_data["clips"][0]["end"]
+print(f"[INFO] Range: {start_time} -> {end_time}")
 
 command = [
     "yt-dlp",
@@ -57,7 +117,7 @@ except subprocess.CalledProcessError as e:
     print(f"[ERROR] Failed to download/cut video: {e}")
     sys.exit(1)
 
-# Upload to Cloudflare R2
+# ========== Upload to Cloudflare R2 ==========
 print("[INFO] Uploading files to Cloudflare R2...")
 s3 = boto3.client(
     's3',
@@ -81,4 +141,4 @@ if os.path.exists(video_output_path):
 else:
     print("[ERROR] Video file was not found for upload.")
 
-print("[SUCCESS] Job complete!") 
+print("[SUCCESS] Job complete!")

@@ -1,5 +1,4 @@
 name: Find Clips (Twitch)
-
 on:
   workflow_dispatch:
     inputs:
@@ -9,26 +8,29 @@ on:
       job_id:
         description: "Job ID from dashboard"
         required: true
-
+      start_time:
+        description: "Manual clip start time (H:MM:SS). Leave blank to let AI find clips."
+        required: false
+        default: ""
+      end_time:
+        description: "Manual clip end time (H:MM:SS). Leave blank to let AI find clips."
+        required: false
+        default: ""
 jobs:
   find-clips-twitch:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-
       - name: Find clips from chat activity
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -39,9 +41,10 @@ jobs:
           R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
           JOB_ID: ${{ github.event.inputs.job_id }}
           TWITCH_URL: ${{ github.event.inputs.vod_url }}
+          START_TIME: ${{ github.event.inputs.start_time }}
+          END_TIME: ${{ github.event.inputs.end_time }}
         run: |
           python scripts/find_clips_twitch.py "$TWITCH_URL" "$JOB_ID"
-
       - name: Debug Environment and Files
         if: always()
         run: |
@@ -53,7 +56,6 @@ jobs:
           if [ -z "${{ secrets.GEMINI_API_KEY }}" ]; then echo "GEMINI API KEY is MISSING!"; else echo "GEMINI API KEY is loaded."; fi
           if [ -z "${{ secrets.R2_ACCESS_KEY_ID }}" ]; then echo "R2 ACCESS KEY is MISSING!"; else echo "R2 ACCESS KEY is loaded."; fi
           if [ -z "${{ secrets.R2_BUCKET_NAME }}" ]; then echo "R2 BUCKET NAME is MISSING!"; else echo "R2 BUCKET NAME is loaded."; fi
-
       - name: Catch Local Files (Backup)
         if: always()
         uses: actions/upload-artifact@v4

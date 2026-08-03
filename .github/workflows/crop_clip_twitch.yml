@@ -6,21 +6,83 @@ on:
       job_id:
         description: "Job ID"
         required: true
-      clip_index:
-        description: "Clip index (0-4)"
-        required: true
-      start_time:
-        description: "Start time (HH:MM:SS)"
-        required: true
-      end_time:
-        description: "End time (HH:MM:SS)"
-        required: true
       vod_url:
         description: "Twitch VOD URL"
         required: true
-      video_id:
-        description: "Video ID (included to prevent 422 API errors from legacy payload)"
+      start_time:
+        description: "Start time (HH:MM:SS)"
         required: false
+        default: ""
+      end_time:
+        description: "End time (HH:MM:SS)"
+        required: false
+        default: ""
+      clip_index:
+        description: "Clip index (0-4)"
+        required: false
+        default: "0"
+      video_id:
+        description: "Video ID"
+        required: false
+        default: ""
+
+      # Layout & Camera Options
+      crop_mode:
+        description: "Crop Mode (full_streamer, center_crop, split_webcam_game, blur_fill)"
+        required: false
+        default: "full_streamer"
+      cam_location:
+        description: "Camera Location (auto, top_left, top_right, bottom_left, bottom_right)"
+        required: false
+        default: "auto"
+
+      # Subtitle Typography & Styling
+      font_family:
+        description: "Font Family"
+        required: false
+        default: "Montserrat-ExtraBold"
+      font_size:
+        description: "Font Size"
+        required: false
+        default: "28"
+      primary_color:
+        description: "Primary Text Color"
+        required: false
+        default: "#FFFFFF"
+      highlight_color:
+        description: "Highlight Text Color"
+        required: false
+        default: "#FFE600"
+      stroke_color:
+        description: "Text Stroke Color"
+        required: false
+        default: "#000000"
+      caption_animation:
+        description: "Subtitle Animation (bouncing_word, pop_in)"
+        required: false
+        default: "bouncing_word"
+
+      # Overlays & Badges
+      render_chat:
+        description: "Render Twitch Chat (true/false)"
+        required: false
+        default: "true"
+      chat_position:
+        description: "Chat Position (bottom_right, bottom_left, top_right)"
+        required: false
+        default: "bottom_right"
+      chat_opacity:
+        description: "Chat Opacity Percentage"
+        required: false
+        default: "80"
+      show_streamer_badge:
+        description: "Show Streamer Badge (true/false)"
+        required: false
+        default: "true"
+      show_progress_bar:
+        description: "Show Progress Bar (true/false)"
+        required: false
+        default: "true"
 
 jobs:
   crop-clip-twitch:
@@ -54,6 +116,19 @@ jobs:
           END_TIME: ${{ github.event.inputs.end_time }}
           VOD_URL: ${{ github.event.inputs.vod_url }}
           VIDEO_ID: ${{ github.event.inputs.video_id }}
+          CROP_MODE: ${{ github.event.inputs.crop_mode }}
+          CAM_LOCATION: ${{ github.event.inputs.cam_location }}
+          FONT_FAMILY: ${{ github.event.inputs.font_family }}
+          FONT_SIZE: ${{ github.event.inputs.font_size }}
+          PRIMARY_COLOR: ${{ github.event.inputs.primary_color }}
+          HIGHLIGHT_COLOR: ${{ github.event.inputs.highlight_color }}
+          STROKE_COLOR: ${{ github.event.inputs.stroke_color }}
+          CAPTION_ANIMATION: ${{ github.event.inputs.caption_animation }}
+          RENDER_CHAT: ${{ github.event.inputs.render_chat }}
+          CHAT_POSITION: ${{ github.event.inputs.chat_position }}
+          CHAT_OPACITY: ${{ github.event.inputs.chat_opacity }}
+          SHOW_STREAMER_BADGE: ${{ github.event.inputs.show_streamer_badge }}
+          SHOW_PROGRESS_BAR: ${{ github.event.inputs.show_progress_bar }}
         run: |
           python scripts/crop_clip_twitch.py \
             --job-id "$JOB_ID" \

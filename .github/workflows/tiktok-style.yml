@@ -12,6 +12,42 @@ on:
       r2_endpoint:
         description: 'R2 Endpoint URL'
         required: true
+      vod_url:
+        description: 'Twitch VOD URL'
+        required: true
+      clip_index:
+        description: 'Clip index'
+        required: true
+      start:
+        description: 'Clip start time (HH:MM:SS)'
+        required: true
+      end:
+        description: 'Clip end time (HH:MM:SS)'
+        required: true
+      layout_mode:
+        description: 'Video layout'
+        required: false
+        default: 'crop'
+        type: choice
+        options:
+          - crop
+          - blur_bg
+      font_size:
+        description: 'Caption font size'
+        required: false
+        default: '85'
+      primary_color:
+        description: 'Primary caption color (hex, e.g. #FFFFFF)'
+        required: false
+        default: '#FFFFFF'
+      highlight_color:
+        description: 'Highlight/spoken-word caption color (hex, e.g. #00FFFF)'
+        required: false
+        default: '#00FFFF'
+      margin_v:
+        description: 'Vertical caption margin (px from bottom edge)'
+        required: false
+        default: '150'
 
 env:
   PYTHON_VERSION: '3.11'
@@ -30,7 +66,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          sudo apt-get install -y ffmpeg fonts-dejavu-core yt-dlp
           pip install openai-whisper pillow numpy boto3 urllib3
 
       - name: Extract account ID
@@ -39,6 +75,24 @@ jobs:
           ACCOUNT_ID=$(echo "$ENDPOINT" | sed 's|https://||' | sed 's|\.r2\.cloudflarestorage\.com||')
           echo "ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
           echo "JOB_ID=${{ github.event.inputs.job_id }}" >> $GITHUB_ENV
+          echo "LAYOUT_MODE=${{ github.event.inputs.layout_mode }}" >> $GITHUB_ENV
+          echo "FONT_SIZE=${{ github.event.inputs.font_size }}" >> $GITHUB_ENV
+          echo "PRIMARY_COLOR=${{ github.event.inputs.primary_color }}" >> $GITHUB_ENV
+          echo "HIGHLIGHT_COLOR=${{ github.event.inputs.highlight_color }}" >> $GITHUB_ENV
+          echo "MARGIN_V=${{ github.event.inputs.margin_v }}" >> $GITHUB_ENV
+
+      # NOTE: this step calls crop_clip_twitch.py directly so layout_mode can
+      # reach it. If cropping already happens in a separate upstream workflow
+      # in your pipeline, drop this step and keep the R2 download instead.
+      - name: Crop & lay out clip
+        run: |
+          python scripts/crop_clip_twitch.py \
+            --job-id "${{ github.event.inputs.job_id }}" \
+            --clip-index "${{ github.event.inputs.clip_index }}" \
+            --start "${{ github.event.inputs.start }}" \
+            --end "${{ github.event.inputs.end }}" \
+            --vod-url "${{ github.event.inputs.vod_url }}" \
+            --layout "${{ github.event.inputs.layout_mode }}"
 
       - name: Download final.mp4 from R2 public URL
         run: |
@@ -57,19 +111,35 @@ jobs:
           mv final.json transcription.json
 
       - name: Generate TikTok ASS captions
+        env:
+          FONT_SIZE: ${{ github.event.inputs.font_size }}
+          PRIMARY_COLOR: ${{ github.event.inputs.primary_color }}
+          HIGHLIGHT_COLOR: ${{ github.event.inputs.highlight_color }}
+          MARGIN_V: ${{ github.event.inputs.margin_v }}
         run: |
           cat > generate_captions.py << 'PYEOF'
           import json
+          import os
+
+          def hex_to_ass(hex_color: str) -> str:
+              """Convert a #RRGGBB (or #RGB) hex string to ASS &H00BBGGRR format."""
+              h = hex_color.strip().lstrip('#')
+              if len(h) == 3:
+                  h = ''.join(c * 2 for c in h)
+              if len(h) != 6:
+                  raise ValueError(f"Invalid hex color: {hex_color}")
+              r, g, b = h[0:2], h[2:4], h[4:6]
+              return f"&H00{b.upper()}{g.upper()}{r.upper()}"
 
           STYLE = {
               'font': 'DejaVu Sans',
-              'fontsize': 48,
-              'primary_color': '&H00FFFFFF',
+              'fontsize': os.environ.get('FONT_SIZE', '85'),
+              'primary_color': hex_to_ass(os.environ.get('PRIMARY_COLOR', '#FFFFFF')),
               'outline_color': '&H00000000',
-              'highlight_color': '&H0000FF88',
+              'highlight_color': hex_to_ass(os.environ.get('HIGHLIGHT_COLOR', '#00FFFF')),
               'outline': 3,
               'shadow': 0,
-              'margin_v': 150
+              'margin_v': os.environ.get('MARGIN_V', '150'),
           }
 
           def ms_to_ass(time_ms):
@@ -136,7 +206,7 @@ jobs:
         run: |
           ffmpeg -y \
             -i final.mp4 \
-            -vf "subtitles=tiktok_captions.ass:force_style='FontSize=48,Outline=3,Shadow=0,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Bold=1'" \
+            -vf "subtitles=tiktok_captions.ass" \
             -af "loudnorm=I=-14:TP=-1.5:LRA=11,acompressor=threshold=-20dB:ratio=4:attack=5:release=100" \
             -c:v libx264 -preset fast -crf 23 \
             -c:a aac -b:a 192k \

@@ -29,6 +29,7 @@ on:
         options:
           - crop
           - blur_bg
+          - face_focus
       font_size:
         description: 'Caption font size'
         required: false
@@ -64,7 +65,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu-core yt-dlp
-          pip install openai-whisper pillow numpy boto3 urllib3
+          pip install openai-whisper pillow numpy boto3 urllib3 opencv-python-headless
 
       - name: Set job env vars
         run: |

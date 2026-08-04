@@ -6,11 +6,8 @@ on:
       job_id:
         description: 'Job ID'
         required: true
-      r2_bucket:
-        description: 'R2 Bucket Name'
-        required: true
-      r2_endpoint:
-        description: 'R2 Endpoint URL'
+      r2_public_url:
+        description: 'R2 Public URL (e.g. https://pub-xxxx.r2.dev)'
         required: true
       vod_url:
         description: 'Twitch VOD URL'
@@ -69,11 +66,8 @@ jobs:
           sudo apt-get install -y ffmpeg fonts-dejavu-core yt-dlp
           pip install openai-whisper pillow numpy boto3 urllib3
 
-      - name: Extract account ID
+      - name: Set job env vars
         run: |
-          ENDPOINT="${{ github.event.inputs.r2_endpoint }}"
-          ACCOUNT_ID=$(echo "$ENDPOINT" | sed 's|https://||' | sed 's|\.r2\.cloudflarestorage\.com||')
-          echo "ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
           echo "JOB_ID=${{ github.event.inputs.job_id }}" >> $GITHUB_ENV
           echo "LAYOUT_MODE=${{ github.event.inputs.layout_mode }}" >> $GITHUB_ENV
           echo "FONT_SIZE=${{ github.event.inputs.font_size }}" >> $GITHUB_ENV
@@ -96,10 +90,9 @@ jobs:
 
       - name: Download final.mp4 from R2 public URL
         run: |
-          PUBLIC_URL="https://pub-${ACCOUNT_ID}.r2.dev"
           FILE_PATH="/jobs/${JOB_ID}/final.mp4"
-          echo "Downloading: ${PUBLIC_URL}${FILE_PATH}"
-          wget -q -O final.mp4 "${PUBLIC_URL}${FILE_PATH}" || {
+          echo "Downloading: ${{ github.event.inputs.r2_public_url }}${FILE_PATH}"
+          wget -q -O final.mp4 "${{ github.event.inputs.r2_public_url }}${FILE_PATH}" || {
             echo "ERROR: Download failed"
             exit 1
           }

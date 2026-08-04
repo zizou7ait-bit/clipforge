@@ -46,7 +46,17 @@ def normalize_time(t):
 
 
 def is_valid_time(t):
-    return bool(re.match(r"^\d{1,2}(:\d{1,2}){1,2}(\.\d+)?$", t.strip()))
+    t = t.strip()
+    # Overall shape: H(:MM){1,2}(.fraction)? — same as before, but now
+    # each MM/SS component is also range-checked (0-59) below.
+    if not re.match(r"^\d{1,2}(:\d{1,2}){1,2}(\.\d+)?$", t):
+        return False
+    parts = t.split(".")[0].split(":")
+    # Last two parts (minutes, seconds) must be strictly 0-59.
+    for part in parts[1:]:
+        if int(part) > 59:
+            return False
+    return True
 
 
 def time_to_seconds(t):

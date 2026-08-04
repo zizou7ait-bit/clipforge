@@ -145,8 +145,13 @@ def main():
         pad_offset = download_section(args.vod_url, args.start, args.end, section_video)
         crop_to_vertical(section_video, output_video, pad_offset, args.start, args.end, args.layout)
 
-        # Output distinct key per clip index to prevent overwriting
-        r2_key = f"jobs/{args.job_id}/clip_{args.clip_index}.mp4"
+        # NOTE: the dashboard (dashboard.php) polls R2 for a fixed key —
+        # jobs/{job_id}/final.mp4 — regardless of clip index, since each job
+        # currently represents a single manual clip. Keep this key in sync
+        # with whatever the dashboard checks for, or it will poll forever
+        # and never find the file (this was the bug: it used to be named
+        # clip_{clip_index}.mp4, which the dashboard never looked for).
+        r2_key = f"jobs/{args.job_id}/final.mp4"
         public_url = upload_file(output_video, r2_key)
         print(f"[SUCCESS] Uploaded final video to: {public_url}")
 

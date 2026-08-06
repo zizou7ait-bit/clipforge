@@ -206,8 +206,12 @@ def download_section(vod_url: str, start: str, end: str, output_path: str) -> fl
         "--force-keyframes-at-cuts",
         "--merge-output-format", "mp4",
         "-o", output_path,
-        vod_url,
     ]
+    cookies_path = "cookies.txt"
+    if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 0:
+        cmd += ["--cookies", cookies_path]
+        print("[INFO] Using cookies.txt for authenticated extraction.")
+    cmd.append(vod_url)
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"[ERROR] yt-dlp stderr: {result.stderr}")

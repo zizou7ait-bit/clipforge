@@ -31,6 +31,11 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
+      - name: Write YouTube cookies
+        run: |
+          cat > cookies.txt << 'EOF'
+          ${{ secrets.YT_COOKIES }}
+          EOF
       - name: Find clips from chat activity
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

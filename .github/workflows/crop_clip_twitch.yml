@@ -99,8 +99,14 @@ jobs:
       - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
       - name: Install dependencies
         run: |
+          pip install -U yt-dlp
           pip install -r requirements.txt
 
       - name: Write YouTube cookies

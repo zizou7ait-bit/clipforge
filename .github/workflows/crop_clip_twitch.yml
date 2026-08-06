@@ -103,6 +103,12 @@ jobs:
         run: |
           pip install -r requirements.txt
 
+      - name: Write YouTube cookies
+        run: |
+          cat > cookies.txt << 'EOF'
+          ${{ secrets.YT_COOKIES }}
+          EOF
+
       - name: Crop to vertical
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}

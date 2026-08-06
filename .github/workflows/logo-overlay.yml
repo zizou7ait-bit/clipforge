@@ -1,0 +1,128 @@
+name: Logo Overlay
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'Job ID'
+        required: true
+      r2_public_url:
+        description: 'R2 Public URL (e.g. https://pub-xxxx.r2.dev)'
+        required: true
+      logo_url:
+        description: 'Public URL of the logo PNG to stamp on'
+        required: true
+      pos_x:
+        description: 'Logo top-left X position, % of video width (0-100)'
+        required: true
+      pos_y:
+        description: 'Logo top-left Y position, % of video height (0-100)'
+        required: true
+      scale:
+        description: 'Logo width as % of video width'
+        required: false
+        default: '16'
+      opacity:
+        description: 'Logo opacity % (80-90)'
+        required: false
+        default: '85'
+      appear_offset:
+        description: 'Seconds before the logo appears at the start (1.25 or 2)'
+        required: false
+        default: '1.25'
+      disappear_offset:
+        description: 'Seconds before the end when the logo is removed (1 or 2)'
+        required: false
+        default: '1'
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  add-logo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Set job env vars
+        run: |
+          echo "JOB_ID=${{ github.event.inputs.job_id }}" >> $GITHUB_ENV
+
+      # tiktok-style.yml has already run for this job by the time this
+      # workflow is dispatched from logo.php, so tiktok.mp4 should exist.
+      - name: Download styled clip (tiktok.mp4) from R2
+        run: |
+          FILE_PATH="/jobs/${JOB_ID}/tiktok.mp4"
+          echo "Downloading: ${{ github.event.inputs.r2_public_url }}${FILE_PATH}"
+          wget -q -O tiktok.mp4 "${{ github.event.inputs.r2_public_url }}${FILE_PATH}" || {
+            echo "ERROR: Download failed - has the TikTok styling step finished for this job?"
+            exit 1
+          }
+          ls -lh tiktok.mp4
+
+      - name: Download logo PNG
+        run: |
+          echo "Downloading logo: ${{ github.event.inputs.logo_url }}"
+          wget -q -O logo.png "${{ github.event.inputs.logo_url }}" || {
+            echo "ERROR: Could not download logo from logo_url"
+            exit 1
+          }
+          ls -lh logo.png
+
+      - name: Overlay logo
+        run: |
+          python scripts/add_logo.py \
+            --input tiktok.mp4 \
+            --logo logo.png \
+            --output logo.mp4 \
+            --pos-x "${{ github.event.inputs.pos_x }}" \
+            --pos-y "${{ github.event.inputs.pos_y }}" \
+            --scale "${{ github.event.inputs.scale }}" \
+            --opacity "${{ github.event.inputs.opacity }}" \
+            --appear-offset "${{ github.event.inputs.appear_offset }}" \
+            --disappear-offset "${{ github.event.inputs.disappear_offset }}"
+          ls -lh logo.mp4
+
+      - name: Upload logo.mp4 to Cloudflare R2 (via Worker)
+        env:
+          R2_UPLOAD_SECRET: ${{ secrets.R2_UPLOAD_SECRET }}
+        run: |
+          WORKER_URL="https://clipforge-uploader.zizou7ait.workers.dev"
+          R2_KEY="jobs/${JOB_ID}/logo.mp4"
+
+          if [ ! -f logo.mp4 ]; then
+            echo "ERROR: logo.mp4 not found in working directory!"
+            exit 1
+          fi
+          ls -lh logo.mp4
+
+          HTTP_STATUS=$(curl -s -o response.txt -w "%{http_code}" \
+            -X POST "${WORKER_URL}" \
+            -H "X-Upload-Secret: ${R2_UPLOAD_SECRET}" \
+            -H "X-R2-Key: ${R2_KEY}" \
+            -H "Content-Type: video/mp4" \
+            --data-binary @logo.mp4)
+
+          echo "=== Response body ==="
+          cat response.txt
+          echo ""
+          echo "=== HTTP status: ${HTTP_STATUS} ==="
+
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "ERROR: Upload failed with status ${HTTP_STATUS}"
+            exit 1
+          fi
+
+          echo "=== SUCCESS: Upload complete ==="
+
+      - name: Cleanup
+        if: always()
+        run: rm -f tiktok.mp4 logo.png logo.mp4 response.txt

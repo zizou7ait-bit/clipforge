@@ -117,8 +117,20 @@ command = [
     "--download-sections", f"*{start_time}-{end_time}",
     "--force-keyframes-at-cuts",
     "-o", video_output_path,
-    twitch_url
 ]
+
+# If a cookies file was written by the workflow (see find_clips_twitch.yml),
+# pass it along. This is what gets YouTube past the "Sign in to confirm
+# you're not a bot" bot-check on GitHub Actions runners. Harmless for
+# Twitch URLs — yt-dlp just won't find any matching-domain cookies to use.
+cookies_path = "cookies.txt"
+if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 0:
+    command += ["--cookies", cookies_path]
+    print("[INFO] Using cookies.txt for authenticated extraction.")
+else:
+    print("[INFO] No cookies.txt found — proceeding without auth (YouTube may bot-check).")
+
+command.append(twitch_url)
 
 try:
     subprocess.run(command, check=True)

@@ -22,10 +22,21 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.11'
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
 
       - name: Install yt-dlp
-        run: pip install yt-dlp
+        run: pip install -U yt-dlp
+
+      - name: Write YouTube cookies
+        run: |
+          cat > cookies.txt << 'EOF'
+          ${{ secrets.YT_COOKIES }}
+          EOF
 
       - name: Run YouTube Download
         env:
@@ -44,3 +55,7 @@ jobs:
           pip install awscli
           aws s3 cp final.mp4 s3://${{ secrets.R2_BUCKET_NAME }}/jobs/${{ github.event.inputs.job_id }}/final.mp4 \
             --endpoint-url $ENDPOINT_URL
+
+      - name: Cleanup
+        if: always()
+        run: rm -f cookies.txt final.mp4

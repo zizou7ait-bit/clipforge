@@ -1,47 +1,61 @@
-import sys
-import os
-import subprocess
+name: YouTube Downloader
 
-def download_yt(url, start_time, end_time, output_file="final.mp4"):
-    # Base yt-dlp command for best mp4 quality
-    cmd = [
-        "yt-dlp",
-        "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4",
-        "--merge-output-format", "mp4",
-        "-o", output_file
-    ]
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        required: true
+      yt_url:
+        required: true
+      start_time:
+        required: false
+      end_time:
+        required: false
 
-    # If times are provided, only download that specific segment to save time/bandwidth
-    if start_time and end_time:
-        print(f"Downloading segment: {start_time} to {end_time}")
-        # yt-dlp syntax for sections: *start-end
-        section_arg = f"*{start_time}-{end_time}"
-        cmd.extend(["--download-sections", section_arg])
-        # Force keyframe accuracy for the cut
-        cmd.extend(["--force-keyframes-at-cuts"])
-    else:
-        print("No timestamps provided. Downloading full video.")
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
-    # Use cookies.txt if present, to avoid YouTube's "Sign in to confirm
-    # you're not a bot" block on datacenter/CI IPs.
-    cookies_path = "cookies.txt"
-    if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 0:
-        cmd.extend(["--cookies", cookies_path])
-        print("Using cookies.txt for authenticated extraction.")
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
 
-    cmd.append(url)
-    
-    print(f"Running command: {' '.join(cmd)}")
-    subprocess.run(cmd, check=True)
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
 
-if __name__ == "__main__":
-    url = os.environ.get("YT_URL")
-    start = os.environ.get("START_TIME", "").strip()
-    end = os.environ.get("END_TIME", "").strip()
-    
-    if not url:
-        print("Error: YT_URL environment variable is missing.")
-        sys.exit(1)
-        
-    download_yt(url, start, end)
-    print("Download complete. Ready for R2 upload.")
+      - name: Install yt-dlp
+        run: pip install -U yt-dlp
+
+      - name: Write YouTube cookies
+        run: |
+          cat > cookies.txt << 'EOF'
+          ${{ secrets.YT_COOKIES }}
+          EOF
+
+      - name: Run YouTube Download
+        env:
+          YT_URL: ${{ github.event.inputs.yt_url }}
+          START_TIME: ${{ github.event.inputs.start_time }}
+          END_TIME: ${{ github.event.inputs.end_time }}
+        run: python scripts/download_youtube.py
+
+      - name: Upload to R2 Bucket
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          ENDPOINT_URL: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          pip install awscli
+          aws s3 cp final.mp4 s3://${{ secrets.R2_BUCKET_NAME }}/jobs/${{ github.event.inputs.job_id }}/final.mp4 \
+            --endpoint-url $ENDPOINT_URL
+
+      - name: Cleanup
+        if: always()
+        run: rm -f cookies.txt final.mp4

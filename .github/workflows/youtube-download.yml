@@ -32,14 +32,15 @@ jobs:
           YT_URL: ${{ github.event.inputs.yt_url }}
           START_TIME: ${{ github.event.inputs.start_time }}
           END_TIME: ${{ github.event.inputs.end_time }}
-        run: python download_youtube.py
+        run: python scripts/download_youtube.py
 
       - name: Upload to R2 Bucket
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
-          ENDPOINT_URL: ${{ secrets.R2_ENDPOINT }}
+          ENDPOINT_URL: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
-          aws s3 cp final.mp4 s3://your-bucket-name/jobs/${{ github.event.inputs.job_id }}/final.mp4 \
+          pip install awscli
+          aws s3 cp final.mp4 s3://${{ secrets.R2_BUCKET_NAME }}/jobs/${{ github.event.inputs.job_id }}/final.mp4 \
             --endpoint-url $ENDPOINT_URL

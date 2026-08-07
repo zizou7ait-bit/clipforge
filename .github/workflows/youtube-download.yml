@@ -1,15 +1,66 @@
-- name: Install yt-dlp (latest)
-  run: pip install -U yt-dlp yt-dlp-ejs
+name: YouTube Downloader
 
-- name: Start PO token provider
-  run: |
-    docker run -d -p 4416:4416 brainicism/bgutil-ytdlp-pot-provider
-    sleep 3
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'YouTube URL to download'
+        required: true
+        type: string
+      start_time:
+        description: 'Clip start time (optional, e.g. 00:00:10)'
+        required: false
+        type: string
+      end_time:
+        description: 'Clip end time (optional, e.g. 00:00:30)'
+        required: false
+        type: string
 
-- name: Restore cookies
-  run: echo "${{ secrets.YT_COOKIES_B64 }}" | base64 -d > cookies.txt
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-- name: Download video
-  env:
-    YT_COOKIES_FILE: cookies.txt
-  run: python scripts/download_youtube.py "https://www.youtube.com/watch?v=sDU_x5BQFas"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install yt-dlp (latest)
+        run: pip install -U yt-dlp yt-dlp-ejs
+
+      - name: Install Deno (JS runtime for yt-dlp)
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Start PO token provider
+        run: |
+          docker run -d -p 4416:4416 brainicism/bgutil-ytdlp-pot-provider
+          sleep 3
+
+      - name: Restore cookies
+        run: echo "${{ secrets.YT_COOKIES_B64 }}" | base64 -d > cookies.txt
+
+      - name: Download video
+        env:
+          YT_COOKIES_FILE: cookies.txt
+          VIDEO_URL: ${{ github.event.inputs.video_url || 'https://www.youtube.com/watch?v=sDU_x5BQFas' }}
+          START_TIME: ${{ github.event.inputs.start_time }}
+          END_TIME: ${{ github.event.inputs.end_time }}
+        run: |
+          if [ -n "$START_TIME" ] && [ -n "$END_TIME" ]; then
+            python scripts/download_youtube.py "$VIDEO_URL" "$START_TIME" "$END_TIME"
+          else
+            python scripts/download_youtube.py "$VIDEO_URL"
+          fi
+
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-video
+          path: final.mp4

@@ -50,6 +50,29 @@ jobs:
       - name: Restore cookies
         run: echo "${{ secrets.YT_COOKIES_B64 }}" | base64 -d > cookies.txt
 
+      - name: Validate cookies file
+        run: |
+          if [ ! -s cookies.txt ]; then
+            echo "::error::cookies.txt is empty. Check that the YT_COOKIES_B64 secret is set and non-empty."
+            exit 1
+          fi
+
+          if ! head -1 cookies.txt | grep -q "Netscape HTTP Cookie File"; then
+            echo "::error::cookies.txt is not in Netscape format (missing '# Netscape HTTP Cookie File' header)."
+            echo "Re-export cookies using a Netscape-format exporter (e.g. 'Get cookies.txt LOCALLY'),"
+            echo "then base64-encode with: base64 -w0 cookies.txt   (Linux)  or  base64 -i cookies.txt -o out.txt  (macOS)"
+            echo "and update the YT_COOKIES_B64 secret with the full output."
+            exit 1
+          fi
+
+          cookie_lines=$(grep -vc '^#\|^$' cookies.txt || true)
+          if [ "$cookie_lines" -lt 1 ]; then
+            echo "::error::cookies.txt has the correct header but no actual cookie entries."
+            exit 1
+          fi
+
+          echo "cookies.txt looks valid: Netscape header present, $cookie_lines cookie line(s) found."
+
       - name: Download video
         env:
           YT_COOKIES_FILE: cookies.txt

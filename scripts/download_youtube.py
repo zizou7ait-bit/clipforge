@@ -6,6 +6,7 @@ import subprocess
 def download_yt(url, start_time, end_time, output_file="final.mp4"):
     cmd = [
         "yt-dlp",
+        "-v",
         "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4",
         "--merge-output-format", "mp4",
         "--extractor-args", "youtube:player-client=android,web",

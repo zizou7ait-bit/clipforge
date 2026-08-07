@@ -5,7 +5,11 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      video_url:
+      job_id:
+        description: 'Job ID for tracking this download'
+        required: false
+        type: string
+      yt_url:
         description: 'YouTube URL to download'
         required: true
         type: string
@@ -49,10 +53,12 @@ jobs:
       - name: Download video
         env:
           YT_COOKIES_FILE: cookies.txt
-          VIDEO_URL: ${{ github.event.inputs.video_url || 'https://www.youtube.com/watch?v=sDU_x5BQFas' }}
+          VIDEO_URL: ${{ github.event.inputs.yt_url }}
           START_TIME: ${{ github.event.inputs.start_time }}
           END_TIME: ${{ github.event.inputs.end_time }}
+          JOB_ID: ${{ github.event.inputs.job_id }}
         run: |
+          echo "Job ID: ${JOB_ID:-none}"
           if [ -n "$START_TIME" ] && [ -n "$END_TIME" ]; then
             python scripts/download_youtube.py "$VIDEO_URL" "$START_TIME" "$END_TIME"
           else
@@ -62,5 +68,5 @@ jobs:
       - name: Upload result
         uses: actions/upload-artifact@v4
         with:
-          name: final-video
+          name: final-video-${{ github.event.inputs.job_id || github.run_id }}
           path: final.mp4

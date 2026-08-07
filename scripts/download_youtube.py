@@ -22,6 +22,13 @@ def download_yt(url, start_time, end_time, output_file="final.mp4"):
     else:
         print("No timestamps provided. Downloading full video.")
 
+    # Use cookies.txt if present, to avoid YouTube's "Sign in to confirm
+    # you're not a bot" block on datacenter/CI IPs.
+    cookies_path = "cookies.txt"
+    if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 0:
+        cmd.extend(["--cookies", cookies_path])
+        print("Using cookies.txt for authenticated extraction.")
+
     cmd.append(url)
     
     print(f"Running command: {' '.join(cmd)}")

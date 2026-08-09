@@ -1,5 +1,4 @@
 name: YouTube Downloader
-
 on:
   push:
     branches: [main]
@@ -47,49 +46,56 @@ jobs:
           docker run -d -p 4416:4416 brainicism/bgutil-ytdlp-pot-provider
           sleep 3
 
-      - name: Restore cookies
-        run: echo "${{ secrets.YT_COOKIES_B64 }}" | base64 -d > cookies.txt
-
-      - name: Validate cookies file
+      # Cookies are OPTIONAL. Works without them for most public videos.
+      - name: Restore cookies (optional)
         run: |
-          if [ ! -s cookies.txt ]; then
-            echo "::error::cookies.txt is empty. Check that the YT_COOKIES_B64 secret is set and non-empty."
-            exit 1
+          if [ -n "${{ secrets.YT_COOKIES_B64 }}" ]; then
+            echo "${{ secrets.YT_COOKIES_B64 }}" | base64 -d > cookies.txt
+            if [ -s cookies.txt ] && head -1 cookies.txt | grep -q "Netscape HTTP Cookie File"; then
+              echo "Cookies loaded."
+            else
+              echo "::warning::Invalid cookies secret, continuing without cookies."
+              rm -f cookies.txt
+            fi
+          else
+            echo "::warning::No cookies set, continuing without them."
           fi
-
-          if ! head -1 cookies.txt | grep -q "Netscape HTTP Cookie File"; then
-            echo "::error::cookies.txt is not in Netscape format (missing '# Netscape HTTP Cookie File' header)."
-            echo "Re-export cookies using a Netscape-format exporter (e.g. 'Get cookies.txt LOCALLY'),"
-            echo "then base64-encode with: base64 -w0 cookies.txt   (Linux)  or  base64 -i cookies.txt -o out.txt  (macOS)"
-            echo "and update the YT_COOKIES_B64 secret with the full output."
-            exit 1
-          fi
-
-          cookie_lines=$(grep -vc '^#\|^$' cookies.txt || true)
-          if [ "$cookie_lines" -lt 1 ]; then
-            echo "::error::cookies.txt has the correct header but no actual cookie entries."
-            exit 1
-          fi
-
-          echo "cookies.txt looks valid: Netscape header present, $cookie_lines cookie line(s) found."
 
       - name: Download video
+        id: download
         env:
           YT_COOKIES_FILE: cookies.txt
           VIDEO_URL: ${{ github.event.inputs.yt_url }}
           START_TIME: ${{ github.event.inputs.start_time }}
           END_TIME: ${{ github.event.inputs.end_time }}
-          JOB_ID: ${{ github.event.inputs.job_id }}
         run: |
-          echo "Job ID: ${JOB_ID:-none}"
           if [ -n "$START_TIME" ] && [ -n "$END_TIME" ]; then
             python scripts/download_youtube.py "$VIDEO_URL" "$START_TIME" "$END_TIME"
           else
             python scripts/download_youtube.py "$VIDEO_URL"
           fi
 
-      - name: Upload result
-        uses: actions/upload-artifact@v4
-        with:
-          name: final-video-${{ github.event.inputs.job_id || github.run_id }}
-          path: final.mp4
+      # Runs whether the download step above succeeded or failed, so the
+      # dashboard always finds out what happened instead of a job hanging
+      # forever in "processing".
+      - name: Send result back to Hostinger
+        if: always()
+        env:
+          JOB_ID: ${{ github.event.inputs.job_id }}
+        run: |
+          UPLOAD_URL="${{ secrets.HOSTINGER_UPLOAD_URL }}"
+          SECRET="${{ secrets.HOSTINGER_UPLOAD_SECRET }}"
+          if [ -f final.mp4 ]; then
+            echo "Uploading final.mp4 to Hostinger..."
+            curl -sS -X POST "$UPLOAD_URL" \
+              -H "X-Upload-Secret: $SECRET" \
+              -F "job_id=${JOB_ID:-unknown}" \
+              -F "video=@final.mp4"
+          else
+            echo "final.mp4 missing - reporting failure to dashboard."
+            curl -sS -X POST "$UPLOAD_URL" \
+              -H "X-Upload-Secret: $SECRET" \
+              -F "job_id=${JOB_ID:-unknown}" \
+              -F "status=failed" \
+              -F "error_message=Download step failed or produced no output. Check the Actions log."
+          fi

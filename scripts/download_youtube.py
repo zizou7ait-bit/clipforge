@@ -4,23 +4,6 @@ import subprocess
 import requests
 
 
-# ============================================================
-# Primary method: self-hosted Cobalt instance
-# ============================================================
-# Cobalt (https://github.com/imputnet/cobalt) resolves the video
-# server-side from ITS OWN ip, so it sidesteps the "Sign in to
-# confirm you're not a bot" wall that GitHub Actions runners hit
-# with yt-dlp + cookies.
-#
-# You must self-host an instance (the public api.cobalt.tools
-# requires explicit permission and blocks most automated callers).
-# Set COBALT_API_URL as a repo/environment variable, e.g.:
-#   COBALT_API_URL=https://your-cobalt-instance.up.railway.app
-#
-# If COBALT_AUTH_TOKEN is set, it's sent as a Bearer token (only
-# needed if your instance has auth enabled).
-
-
 def download_via_cobalt(url, start=None, end=None, output="final.mp4"):
     base_url = os.environ.get("COBALT_API_URL")
     if not base_url:
@@ -85,8 +68,6 @@ def download_via_cobalt(url, start=None, end=None, output="final.mp4"):
 
 
 def trim_with_ffmpeg(path, start, end):
-    """Cobalt doesn't support section trimming like yt-dlp's
-    --download-sections, so trim locally with ffmpeg after download."""
     trimmed = "final_trimmed.mp4"
     cmd = [
         "ffmpeg", "-y",
@@ -105,10 +86,6 @@ def trim_with_ffmpeg(path, start, end):
     os.replace(trimmed, path)
     return True
 
-
-# ============================================================
-# Fallback method: yt-dlp + cookies (the original approach)
-# ============================================================
 
 def download_via_ytdlp(url, start=None, end=None, output="final.mp4"):
     cmd = [
@@ -145,10 +122,6 @@ def download_via_ytdlp(url, start=None, end=None, output="final.mp4"):
         print(f"yt-dlp failed: {e}")
         return False
 
-
-# ============================================================
-# Entry point: try Cobalt first, fall back to yt-dlp
-# ============================================================
 
 def download_yt(url, start=None, end=None, output="final.mp4"):
     if download_via_cobalt(url, start, end, output):

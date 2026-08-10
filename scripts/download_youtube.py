@@ -1,9 +1,116 @@
 import os
 import sys
 import subprocess
+import requests
 
 
-def download_yt(url, start=None, end=None, output="final.mp4"):
+# ============================================================
+# Primary method: self-hosted Cobalt instance
+# ============================================================
+# Cobalt (https://github.com/imputnet/cobalt) resolves the video
+# server-side from ITS OWN ip, so it sidesteps the "Sign in to
+# confirm you're not a bot" wall that GitHub Actions runners hit
+# with yt-dlp + cookies.
+#
+# You must self-host an instance (the public api.cobalt.tools
+# requires explicit permission and blocks most automated callers).
+# Set COBALT_API_URL as a repo/environment variable, e.g.:
+#   COBALT_API_URL=https://your-cobalt-instance.up.railway.app
+#
+# If COBALT_AUTH_TOKEN is set, it's sent as a Bearer token (only
+# needed if your instance has auth enabled).
+
+
+def download_via_cobalt(url, start=None, end=None, output="final.mp4"):
+    base_url = os.environ.get("COBALT_API_URL")
+    if not base_url:
+        print("COBALT_API_URL not set; skipping Cobalt.")
+        return False
+
+    base_url = base_url.rstrip("/")
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    token = os.environ.get("COBALT_AUTH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    payload = {
+        "url": url,
+        "videoQuality": "1080",
+        "downloadMode": "auto",
+    }
+
+    print(f"Requesting download from Cobalt instance: {base_url}")
+    try:
+        resp = requests.post(base_url, json=payload, headers=headers, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"Cobalt request failed: {e}")
+        return False
+
+    status = data.get("status")
+    if status in ("tunnel", "redirect"):
+        stream_url = data.get("url")
+    elif status == "picker":
+        items = data.get("picker", [])
+        video_items = [i for i in items if i.get("type") == "video"] or items
+        if not video_items:
+            print(f"Cobalt returned an empty picker: {data}")
+            return False
+        stream_url = video_items[0].get("url")
+    else:
+        print(f"Cobalt returned an unexpected/error status: {data}")
+        return False
+
+    if not stream_url:
+        print(f"Cobalt response had no stream url: {data}")
+        return False
+
+    print("Downloading resolved stream from Cobalt...")
+    try:
+        with requests.get(stream_url, stream=True, timeout=300) as r:
+            r.raise_for_status()
+            with open(output, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+    except Exception as e:
+        print(f"Downloading resolved Cobalt stream failed: {e}")
+        return False
+
+    if start is not None and end is not None:
+        return trim_with_ffmpeg(output, start, end)
+
+    return True
+
+
+def trim_with_ffmpeg(path, start, end):
+    """Cobalt doesn't support section trimming like yt-dlp's
+    --download-sections, so trim locally with ffmpeg after download."""
+    trimmed = "final_trimmed.mp4"
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", path,
+        "-ss", str(start),
+        "-to", str(end),
+        "-c", "copy",
+        trimmed,
+    ]
+    print("Trimming with ffmpeg:", " ".join(cmd))
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"ffmpeg trim failed: {e}")
+        return False
+    os.replace(trimmed, path)
+    return True
+
+
+# ============================================================
+# Fallback method: yt-dlp + cookies (the original approach)
+# ============================================================
+
+def download_via_ytdlp(url, start=None, end=None, output="final.mp4"):
     cmd = [
         "yt-dlp",
         "-v",
@@ -16,7 +123,6 @@ def download_yt(url, start=None, end=None, output="final.mp4"):
         "--fragment-retries", "5",
     ]
 
-    # Use cookies if provided via env var (set from a GitHub Actions secret)
     cookies_path = os.environ.get("YT_COOKIES_FILE", "cookies.txt")
     if os.path.exists(cookies_path):
         cmd += ["--cookies", cookies_path]
@@ -32,7 +138,29 @@ def download_yt(url, start=None, end=None, output="final.mp4"):
     cmd += ["-o", output, url]
 
     print("Running command:", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"yt-dlp failed: {e}")
+        return False
+
+
+# ============================================================
+# Entry point: try Cobalt first, fall back to yt-dlp
+# ============================================================
+
+def download_yt(url, start=None, end=None, output="final.mp4"):
+    if download_via_cobalt(url, start, end, output):
+        print("Download succeeded via Cobalt.")
+        return
+
+    print("Falling back to yt-dlp...")
+    if download_via_ytdlp(url, start, end, output):
+        print("Download succeeded via yt-dlp.")
+        return
+
+    raise RuntimeError("Both Cobalt and yt-dlp failed to download the video.")
 
 
 if __name__ == "__main__":

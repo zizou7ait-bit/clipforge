@@ -33,8 +33,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install yt-dlp (latest)
-        run: pip install -U yt-dlp yt-dlp-ejs
+      - name: Install yt-dlp (latest) and ffmpeg
+        run: |
+          pip install -U yt-dlp yt-dlp-ejs requests
+          sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Install Deno (JS runtime for yt-dlp)
         uses: denoland/setup-deno@v2
@@ -65,6 +67,8 @@ jobs:
         id: download
         env:
           YT_COOKIES_FILE: cookies.txt
+          COBALT_API_URL: ${{ secrets.COBALT_API_URL }}
+          COBALT_AUTH_TOKEN: ${{ secrets.COBALT_AUTH_TOKEN }}
           VIDEO_URL: ${{ github.event.inputs.yt_url }}
           START_TIME: ${{ github.event.inputs.start_time }}
           END_TIME: ${{ github.event.inputs.end_time }}

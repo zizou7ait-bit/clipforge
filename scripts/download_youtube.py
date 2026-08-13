@@ -7,12 +7,6 @@ import requests
 COBALT_DIRECTORY_URL = "https://cobalt.directory/api/working?type=api"
 COBALT_USER_AGENT = "clipforge/1.0 (+https://github.com/zizou7ait-bit/clipforge)"
 
-# cobalt.directory blocks requests from GitHub Actions' IP ranges with a 403
-# (same "datacenter IP = bot" problem as YouTube itself), so we can't reliably
-# fetch a live list from CI. This is a snapshot of working YouTube-capable
-# community instances as of 2026-08-13, used as a fallback when the live
-# fetch fails. Update it from the "youtube" key at COBALT_DIRECTORY_URL
-# (fetched from a normal, non-CI network) if these stop working.
 FALLBACK_YOUTUBE_INSTANCES = [
     "https://subito-c.meowing.de",
     "https://cobaltapi.kittycat.boo",
@@ -29,8 +23,6 @@ FALLBACK_YOUTUBE_INSTANCES = [
 
 
 def _request_cobalt(base_url, url, headers, timeout=60):
-    """POST a resolve request to a single cobalt instance and return the
-    resolved stream URL, or None if this instance didn't give us one."""
     payload = {
         "url": url,
         "videoQuality": "1080",
@@ -75,7 +67,6 @@ def _download_stream(stream_url, output):
 
 
 def download_via_cobalt(url, start=None, end=None, output="final.mp4"):
-    """Cobalt via a self-hosted / trusted instance, set via COBALT_API_URL."""
     base_url = os.environ.get("COBALT_API_URL")
     if not base_url:
         print("COBALT_API_URL not set; skipping self-hosted Cobalt.")
@@ -101,27 +92,64 @@ def download_via_cobalt(url, start=None, end=None, output="final.mp4"):
     return True
 
 
-def download_via_public_cobalt_directory(url, start=None, end=None, output="final.mp4"):
-    """Free fallback: pull a live list of community-run Cobalt instances
-    from cobalt.directory that currently support YouTube, and try each one
-    in turn. No signup, no server to maintain -- but uptime of any single
-    instance isn't guaranteed, which is why we try several."""
-    headers = {
-        "Accept": "application/json",
+def _proxy_headers():
+    secret = os.environ.get("COBALT_PROXY_SECRET")
+    return {
         "Content-Type": "application/json",
-        "User-Agent": COBALT_USER_AGENT,
+        "X-Proxy-Secret": secret or "",
     }
 
-    print("Fetching list of public Cobalt instances that support YouTube...")
-    instances = []
-    try:
-        resp = requests.get(COBALT_DIRECTORY_URL, headers={"User-Agent": COBALT_USER_AGENT}, timeout=20)
-        resp.raise_for_status()
-        instances = resp.json().get("data", {}).get("youtube", [])
-    except Exception as e:
-        print(f"Could not fetch live Cobalt instance directory ({e}); "
-              f"using built-in fallback list instead.")
 
+def _fetch_instances_via_proxy(proxy_base):
+    try:
+        resp = requests.get(
+            proxy_base.rstrip("/") + "/directory",
+            headers=_proxy_headers(),
+            timeout=20,
+        )
+        resp.raise_for_status()
+        return resp.json().get("data", {}).get("youtube", [])
+    except Exception as e:
+        print(f"Could not fetch instance directory via proxy ({e}); using built-in fallback list instead.")
+        return []
+
+
+def _resolve_via_proxy(proxy_base, instance, url):
+    try:
+        resp = requests.post(
+            proxy_base.rstrip("/") + "/resolve",
+            headers=_proxy_headers(),
+            json={"instance": instance, "url": url, "videoQuality": "1080", "downloadMode": "auto"},
+            timeout=60,
+        )
+        if resp.status_code != 200:
+            print(f"  -> proxy resolve via {instance} failed: HTTP {resp.status_code} {resp.text[:200]}")
+            return None
+        data = resp.json()
+    except Exception as e:
+        print(f"  -> proxy resolve via {instance} failed: {e}")
+        return None
+
+    status = data.get("status")
+    if status in ("tunnel", "redirect"):
+        return data.get("url")
+    elif status == "picker":
+        items = data.get("picker", [])
+        video_items = [i for i in items if i.get("type") == "video"] or items
+        return video_items[0].get("url") if video_items else None
+    else:
+        print(f"  -> {instance} returned an unexpected/error status via proxy: {data}")
+        return None
+
+
+def download_via_public_cobalt_directory(url, start=None, end=None, output="final.mp4"):
+    proxy_base = os.environ.get("COBALT_PROXY_URL")
+    if not proxy_base:
+        print("COBALT_PROXY_URL not set; skipping proxied public Cobalt lookup.")
+        return False
+
+    print("Fetching list of public Cobalt instances that support YouTube (via proxy)...")
+    instances = _fetch_instances_via_proxy(proxy_base)
     if not instances:
         instances = FALLBACK_YOUTUBE_INSTANCES
 
@@ -131,8 +159,8 @@ def download_via_public_cobalt_directory(url, start=None, end=None, output="fina
 
     print(f"Found {len(instances)} candidate instance(s); trying them in order...")
     for base_url in instances:
-        print(f"Trying public Cobalt instance: {base_url}")
-        stream_url = _request_cobalt(base_url.rstrip("/"), url, headers)
+        print(f"Trying public Cobalt instance (via proxy): {base_url}")
+        stream_url = _resolve_via_proxy(proxy_base, base_url, url)
         if not stream_url:
             continue
         if _download_stream(stream_url, output):
@@ -181,8 +209,7 @@ def download_via_ytdlp(url, start=None, end=None, output="final.mp4"):
     if os.path.exists(cookies_path):
         cmd += ["--cookies", cookies_path]
     else:
-        print(f"Warning: cookies file not found at {cookies_path}; "
-              f"continuing without cookies (more likely to hit bot detection).")
+        print(f"Warning: cookies file not found at {cookies_path}; continuing without cookies.")
 
     if start is not None and end is not None:
         cmd += ["--download-sections", f"*{start}-{end}"]
@@ -201,18 +228,15 @@ def download_via_ytdlp(url, start=None, end=None, output="final.mp4"):
 
 
 def download_yt(url, start=None, end=None, output="final.mp4"):
-    # 1. Self-hosted / trusted Cobalt instance, if configured.
     if download_via_cobalt(url, start, end, output):
         print("Download succeeded via self-hosted Cobalt.")
         return
 
-    # 2. Free fallback: community-run public Cobalt instances.
     print("Falling back to public Cobalt instance directory...")
     if download_via_public_cobalt_directory(url, start, end, output):
         print("Download succeeded via a public Cobalt instance.")
         return
 
-    # 3. Last resort: yt-dlp + cookies, most exposed to bot detection on CI.
     print("Falling back to yt-dlp...")
     if download_via_ytdlp(url, start, end, output):
         print("Download succeeded via yt-dlp.")

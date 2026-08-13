@@ -69,6 +69,8 @@ jobs:
           YT_COOKIES_FILE: cookies.txt
           COBALT_API_URL: ${{ secrets.COBALT_API_URL }}
           COBALT_AUTH_TOKEN: ${{ secrets.COBALT_AUTH_TOKEN }}
+          COBALT_PROXY_URL: ${{ secrets.COBALT_PROXY_URL }}
+          COBALT_PROXY_SECRET: ${{ secrets.COBALT_PROXY_SECRET }}
           VIDEO_URL: ${{ github.event.inputs.yt_url }}
           START_TIME: ${{ github.event.inputs.start_time }}
           END_TIME: ${{ github.event.inputs.end_time }}

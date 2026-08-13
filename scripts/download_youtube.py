@@ -7,6 +7,26 @@ import requests
 COBALT_DIRECTORY_URL = "https://cobalt.directory/api/working?type=api"
 COBALT_USER_AGENT = "clipforge/1.0 (+https://github.com/zizou7ait-bit/clipforge)"
 
+# cobalt.directory blocks requests from GitHub Actions' IP ranges with a 403
+# (same "datacenter IP = bot" problem as YouTube itself), so we can't reliably
+# fetch a live list from CI. This is a snapshot of working YouTube-capable
+# community instances as of 2026-08-13, used as a fallback when the live
+# fetch fails. Update it from the "youtube" key at COBALT_DIRECTORY_URL
+# (fetched from a normal, non-CI network) if these stop working.
+FALLBACK_YOUTUBE_INSTANCES = [
+    "https://subito-c.meowing.de",
+    "https://cobaltapi.kittycat.boo",
+    "https://api-cobalt.eversiege.network",
+    "https://apicobalt.mgytr.top",
+    "https://api.qwkuns.me",
+    "https://bergung-api.hoffnungfuerdiezukunft.net",
+    "https://cobalt-omega.wolfy.love",
+    "https://melon.clxxped.lol",
+    "https://rue-cobalt.xenon.zone",
+    "https://kitty.tame.gg",
+    "https://lime.clxxped.lol",
+]
+
 
 def _request_cobalt(base_url, url, headers, timeout=60):
     """POST a resolve request to a single cobalt instance and return the
@@ -93,16 +113,20 @@ def download_via_public_cobalt_directory(url, start=None, end=None, output="fina
     }
 
     print("Fetching list of public Cobalt instances that support YouTube...")
+    instances = []
     try:
         resp = requests.get(COBALT_DIRECTORY_URL, headers={"User-Agent": COBALT_USER_AGENT}, timeout=20)
         resp.raise_for_status()
         instances = resp.json().get("data", {}).get("youtube", [])
     except Exception as e:
-        print(f"Could not fetch Cobalt instance directory: {e}")
-        return False
+        print(f"Could not fetch live Cobalt instance directory ({e}); "
+              f"using built-in fallback list instead.")
 
     if not instances:
-        print("Directory returned no working YouTube-capable instances right now.")
+        instances = FALLBACK_YOUTUBE_INSTANCES
+
+    if not instances:
+        print("No working YouTube-capable instances available (live or fallback).")
         return False
 
     print(f"Found {len(instances)} candidate instance(s); trying them in order...")

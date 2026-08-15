@@ -192,41 +192,6 @@ def trim_with_ffmpeg(path, start, end):
     return True
 
 
-def download_via_ytdlp(url, start=None, end=None, output="final.mp4"):
-    cmd = [
-        "yt-dlp",
-        "-v",
-        "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4",
-        "--merge-output-format", "mp4",
-        "--extractor-args", "youtube:player-client=ios,android,web_safari",
-        "--extractor-args", "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416",
-        "--js-runtimes", "deno",
-        "--retries", "5",
-        "--fragment-retries", "5",
-    ]
-
-    cookies_path = os.environ.get("YT_COOKIES_FILE", "cookies.txt")
-    if os.path.exists(cookies_path):
-        cmd += ["--cookies", cookies_path]
-    else:
-        print(f"Warning: cookies file not found at {cookies_path}; continuing without cookies.")
-
-    if start is not None and end is not None:
-        cmd += ["--download-sections", f"*{start}-{end}"]
-    else:
-        print("No timestamps provided. Downloading full video.")
-
-    cmd += ["-o", output, url]
-
-    print("Running command:", " ".join(cmd))
-    try:
-        subprocess.run(cmd, check=True)
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"yt-dlp failed: {e}")
-        return False
-
-
 def download_yt(url, start=None, end=None, output="final.mp4"):
     if download_via_cobalt(url, start, end, output):
         print("Download succeeded via self-hosted Cobalt.")
@@ -237,12 +202,7 @@ def download_yt(url, start=None, end=None, output="final.mp4"):
         print("Download succeeded via a public Cobalt instance.")
         return
 
-    print("Falling back to yt-dlp...")
-    if download_via_ytdlp(url, start, end, output):
-        print("Download succeeded via yt-dlp.")
-        return
-
-    raise RuntimeError("Cobalt (self-hosted), public Cobalt instances, and yt-dlp all failed to download the video.")
+    raise RuntimeError("Cobalt (self-hosted) and public Cobalt instances all failed to download the video.")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,99 @@
+name: Instagram Downloader
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'Job ID for tracking this download'
+        required: false
+        type: string
+      insta_url:
+        description: 'Instagram Reel / post URL to download'
+        required: true
+        type: string
+      start_time:
+        description: 'Clip start time (optional, e.g. 00:00:10)'
+        required: false
+        type: string
+      end_time:
+        description: 'Clip end time (optional, e.g. 00:00:30)'
+        required: false
+        type: string
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install yt-dlp and ffmpeg
+        run: |
+          pip install -U yt-dlp
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Download Instagram video
+        env:
+          VIDEO_URL: ${{ github.event.inputs.insta_url }}
+          START_TIME: ${{ github.event.inputs.start_time }}
+          END_TIME: ${{ github.event.inputs.end_time }}
+        run: |
+          if [ -n "$START_TIME" ] && [ -n "$END_TIME" ]; then
+            python scripts/download_instagram.py "$VIDEO_URL" "$START_TIME" "$END_TIME"
+          else
+            python scripts/download_instagram.py "$VIDEO_URL"
+          fi
+
+      # Stages the download as jobs/{job_id}/tiktok.mp4 in R2 - the same key
+      # tiktok-style.yml writes to - so the existing Add Logo flow
+      # (logo.php -> logo-overlay.yml) can pick it up. If this step fails,
+      # the download itself is unaffected; only Add Logo won't work for
+      # that job.
+      - name: Upload to R2 for the logo step (via Worker)
+        if: always()
+        continue-on-error: true
+        env:
+          R2_UPLOAD_SECRET: ${{ secrets.R2_UPLOAD_SECRET }}
+          JOB_ID: ${{ github.event.inputs.job_id }}
+        run: |
+          if [ ! -f final.mp4 ]; then
+            echo "No final.mp4 - skipping R2 upload."
+            exit 0
+          fi
+          WORKER_URL="https://clipforge-uploader.zizou7ait.workers.dev"
+          R2_KEY="jobs/${JOB_ID:-unknown}/tiktok.mp4"
+          HTTP_STATUS=$(curl -s -o response.txt -w "%{http_code}" \
+            -X POST "${WORKER_URL}" \
+            -H "X-Upload-Secret: ${R2_UPLOAD_SECRET}" \
+            -H "X-R2-Key: ${R2_KEY}" \
+            -H "Content-Type: video/mp4" \
+            --data-binary @final.mp4)
+          echo "R2 upload HTTP status: ${HTTP_STATUS}"
+          cat response.txt || true
+
+      # Runs whether the steps above succeeded or failed, so the dashboard
+      # always finds out what happened instead of a job hanging forever in
+      # "processing".
+      - name: Send result back to Hostinger
+        if: always()
+        env:
+          JOB_ID: ${{ github.event.inputs.job_id }}
+        run: |
+          UPLOAD_URL="${{ secrets.HOSTINGER_UPLOAD_URL }}"
+          SECRET="${{ secrets.HOSTINGER_UPLOAD_SECRET }}"
+          if [ -f final.mp4 ]; then
+            curl -sS -X POST "$UPLOAD_URL" \
+              -H "X-Upload-Secret: $SECRET" \
+              -F "job_id=${JOB_ID:-unknown}" \
+              -F "video=@final.mp4"
+          else
+            curl -sS -X POST "$UPLOAD_URL" \
+              -H "X-Upload-Secret: $SECRET" \
+              -F "job_id=${JOB_ID:-unknown}" \
+              -F "status=failed" \
+              -F "error_message=Download failed (private/deleted post, or Instagram blocked the request). Check the Actions log."
+          fi

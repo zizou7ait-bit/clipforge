@@ -18,6 +18,10 @@ on:
         description: 'Clip end time (optional, e.g. 00:00:30)'
         required: false
         type: string
+      r2_public_url:
+        description: 'Unused - accepted for compatibility only'
+        required: false
+        type: string
 
 jobs:
   download:

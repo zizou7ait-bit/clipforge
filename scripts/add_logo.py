@@ -6,9 +6,12 @@ Stamps a logo/watermark PNG onto an already-rendered vertical clip
 (1080x1920, e.g. tiktok.mp4 out of tiktok-style.yml), following safe
 timing/opacity rules so the mark doesn't look bot-stamped:
 
-  - never visible at t=0 or on the very last frame
-  - fades in at --appear-offset seconds (1.25 or 2) from the start
-  - is removed --disappear-offset seconds (1 or 2) before the clip ends
+  - by default fades in shortly after t=0 and is removed shortly before
+    the last frame, but --appear-offset 0 / --disappear-offset 0 are
+    valid choices to show the logo from the very first frame and/or
+    keep it up through the very last frame
+  - fades in at --appear-offset seconds (0, 1.25 or 2) from the start
+  - is removed --disappear-offset seconds (0, 1 or 2) before the clip ends
   - opacity is clamped to 80-90%
   - blend mode is ffmpeg's default overlay ("Normal" blend, no extra
     blend-mode filter applied)
@@ -46,13 +49,13 @@ def main():
     parser.add_argument("--pos-x", required=True, type=float, help="Logo top-left X, %% of canvas width (0-100)")
     parser.add_argument("--pos-y", required=True, type=float, help="Logo top-left Y, %% of canvas height (0-100)")
     parser.add_argument("--scale", required=False, type=float, default=16.0,
-                         help="Logo width as %% of canvas width (default 16)")
+                         help="Logo width as %% of canvas width (default 16, max 60)")
     parser.add_argument("--opacity", required=False, type=float, default=85.0,
                          help="Opacity %% (clamped to 80-90, default 85)")
-    parser.add_argument("--appear-offset", required=False, default="1.25", choices=["1.25", "2"],
-                         help="Seconds before the logo appears at the start")
-    parser.add_argument("--disappear-offset", required=False, default="1", choices=["1", "2"],
-                         help="Seconds before the end when the logo is removed")
+    parser.add_argument("--appear-offset", required=False, default="1.25", choices=["0", "1.25", "2"],
+                         help="Seconds before the logo appears at the start (0 = visible from the first frame)")
+    parser.add_argument("--disappear-offset", required=False, default="1", choices=["0", "1", "2"],
+                         help="Seconds before the end when the logo is removed (0 = stays visible through the last frame)")
     parser.add_argument("--canvas-width", type=int, default=1080)
     parser.add_argument("--canvas-height", type=int, default=1920)
     args = parser.parse_args()
@@ -74,7 +77,7 @@ def main():
     opacity_pct = clamp(args.opacity, 80.0, 90.0)
     opacity_decimal = round(opacity_pct / 100.0, 3)
 
-    logo_w = int(args.canvas_width * clamp(args.scale, 5, 40) / 100.0)
+    logo_w = int(args.canvas_width * clamp(args.scale, 5, 60) / 100.0)
     x_px = int(args.canvas_width * clamp(args.pos_x, 0, 100) / 100.0)
     y_px = int(args.canvas_height * clamp(args.pos_y, 0, 100) / 100.0)
     # Keep the logo fully on-screen even if the dropped position lands

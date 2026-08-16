@@ -19,7 +19,7 @@ on:
         description: 'Logo top-left Y position, % of video height (0-100)'
         required: true
       scale:
-        description: 'Logo width as % of video width'
+        description: 'Logo width as % of video width (5-60)'
         required: false
         default: '16'
       opacity:
@@ -27,11 +27,11 @@ on:
         required: false
         default: '85'
       appear_offset:
-        description: 'Seconds before the logo appears at the start (1.25 or 2)'
+        description: 'Seconds before the logo appears at the start (0, 1.25 or 2; 0 = visible from frame one)'
         required: false
         default: '1.25'
       disappear_offset:
-        description: 'Seconds before the end when the logo is removed (1 or 2)'
+        description: 'Seconds before the end when the logo is removed (0, 1 or 2; 0 = stays until the last frame)'
         required: false
         default: '1'
 

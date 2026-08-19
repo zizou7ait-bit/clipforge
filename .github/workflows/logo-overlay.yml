@@ -19,7 +19,7 @@ on:
         description: 'Logo top-left Y position, % of video height (0-100)'
         required: true
       scale:
-        description: 'Logo width as % of video width (5-60)'
+        description: 'Logo width as % of video width (5-100)'
         required: false
         default: '16'
       opacity:

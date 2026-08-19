@@ -76,6 +76,13 @@ def upload_file(local_path: str, r2_key: str) -> str:
         extra_args["ContentType"] = "video/mp4"
     elif r2_key.endswith(".json"):
         extra_args["ContentType"] = "application/json"
+    # These keys (tiktok.mp4, logo.mp4, final.mp4, clips.json) get
+    # overwritten in place every time a job re-renders -- the R2 key
+    # never changes. Without this, Cloudflare's CDN in front of the
+    # bucket caches the object at its default (long) TTL, so a fresh
+    # render can keep serving the old bytes at the same URL even
+    # though the underlying object was replaced.
+    extra_args["CacheControl"] = "no-cache, no-store, must-revalidate"
 
     def _do_upload():
         client = get_r2_client()  # fresh client each attempt
@@ -91,7 +98,8 @@ def upload_json(data_dict: dict, r2_key: str) -> str:
 
     def _do_upload():
         client = get_r2_client()
-        client.put_object(Bucket=bucket_name, Key=r2_key, Body=json_bytes, ContentType="application/json")
+        client.put_object(Bucket=bucket_name, Key=r2_key, Body=json_bytes, ContentType="application/json",
+                          CacheControl="no-cache, no-store, must-revalidate")
 
     _run_with_retries(f"upload_json({r2_key})", _do_upload)
     return get_public_url(r2_key)

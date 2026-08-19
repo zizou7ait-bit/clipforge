@@ -37,6 +37,16 @@ def probe_duration(path: str) -> float:
     return float(json.loads(out.stdout)["format"]["duration"])
 
 
+def probe_dimensions(path: str):
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "json", path],
+        capture_output=True, text=True, check=True,
+    )
+    stream = json.loads(out.stdout)["streams"][0]
+    return int(stream["width"]), int(stream["height"])
+
+
 def clamp(value, lo, hi):
     return max(lo, min(hi, value))
 
@@ -56,9 +66,25 @@ def main():
                          help="Seconds before the logo appears at the start (0 = visible from the first frame)")
     parser.add_argument("--disappear-offset", required=False, default="1", choices=["0", "1", "2"],
                          help="Seconds before the end when the logo is removed (0 = stays visible through the last frame)")
-    parser.add_argument("--canvas-width", type=int, default=1080)
-    parser.add_argument("--canvas-height", type=int, default=1920)
+    parser.add_argument("--canvas-width", type=int, default=None,
+                         help="Override canvas width. If omitted, read from --input's actual video stream.")
+    parser.add_argument("--canvas-height", type=int, default=None,
+                         help="Override canvas height. If omitted, read from --input's actual video stream.")
     args = parser.parse_args()
+
+    # Videos that went through the TikTok styling pass are always
+    # 1080x1920, but Instagram reels are stamped directly on the raw
+    # download (insta.php skips that styling/crop step), so they can be
+    # a different resolution. Probing the real dimensions instead of
+    # assuming 1080x1920 keeps the logo's x/y position on-frame either way.
+    if args.canvas_width is None or args.canvas_height is None:
+        probed_w, probed_h = probe_dimensions(args.input)
+        if args.canvas_width is None:
+            args.canvas_width = probed_w
+        if args.canvas_height is None:
+            args.canvas_height = probed_h
+        print(f"[INFO] Using canvas {args.canvas_width}x{args.canvas_height} "
+              f"(probed from {args.input})")
 
     duration = probe_duration(args.input)
     appear = float(args.appear_offset)

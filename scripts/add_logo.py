@@ -49,7 +49,7 @@ def main():
     parser.add_argument("--pos-x", required=True, type=float, help="Logo top-left X, %% of canvas width (0-100)")
     parser.add_argument("--pos-y", required=True, type=float, help="Logo top-left Y, %% of canvas height (0-100)")
     parser.add_argument("--scale", required=False, type=float, default=16.0,
-                         help="Logo width as %% of canvas width (default 16, max 60)")
+                         help="Logo width as %% of canvas width (default 16, max 100 -- as big as the user wants, up to full frame width)")
     parser.add_argument("--opacity", required=False, type=float, default=85.0,
                          help="Opacity %% (clamped to 80-90, default 85)")
     parser.add_argument("--appear-offset", required=False, default="1.25", choices=["0", "1.25", "2"],
@@ -77,7 +77,7 @@ def main():
     opacity_pct = clamp(args.opacity, 80.0, 90.0)
     opacity_decimal = round(opacity_pct / 100.0, 3)
 
-    logo_w = int(args.canvas_width * clamp(args.scale, 5, 60) / 100.0)
+    logo_w = int(args.canvas_width * clamp(args.scale, 5, 100) / 100.0)
     x_px = int(args.canvas_width * clamp(args.pos_x, 0, 100) / 100.0)
     y_px = int(args.canvas_height * clamp(args.pos_y, 0, 100) / 100.0)
     # Keep the logo fully on-screen even if the dropped position lands
